@@ -24,6 +24,14 @@ native SDK.
   (dart:io)"); secure sockets use the upstream unsupported variant. The 34-patch
   tree is `89f8823f45bbf805abc062c24f8a3b33e896ddeb`. The launcher does not link
   the archive yet.
+- Runtime loader spike (2026-11-21, New 3DS, Luma3DS 13.5): **go**. The prototype
+  in `runtime/ctr/test/loader` loaded a devkitARM `-shared -fPIC` object from
+  the SD card, applied `R_ARM_RELATIVE`, `ABS32`, `GLOB_DAT` and `JUMP_SLOT`
+  relocations, ran `.init_array`, flushed caches with Luma's SVC 0x80 and made
+  the text read-execute with `svcControlProcessMemory`. Calls into the object,
+  callbacks into the app, libc and libgcc imports and hard-float arguments all
+  worked; a TLS relocation was rejected by name. `DynamicLibrary.open` will
+  therefore use a real runtime loader rather than the link-time fallback.
 - The compiled Linux SDK built hello, async, GC stress, exceptions and focused
   numerics in both AOT and JIT modes. Networking was disabled, the SDK mount was
   read-only, no source SDK checkout was mounted and PATH contained only bundled
