@@ -134,12 +134,21 @@ the run without failing it. Without a host the launcher behaves as with schema
 1. The `begin` record carries the schema that was read (`1` or `2`), and
 `results.py` accepts only those two values.
 
-**Unsupported `dart:io`.** At bootstrap, after the script loads, the launcher
-attaches a fallback resolver to `dart:io` (`runtime/ctr/source/unsupported.cc`).
-Each `dart:io` native then throws a catchable `UnsupportedError` naming the
-native, instead of hitting the VM's `Failed to resolve native function` abort
-in AOT. The host-VM driver accepts `CTR_TEST_VM_FLAG=--link_natives_lazily` to
-exercise AOT's native linking on the host JIT VM.
+**`dart:io`.** Before `Dart_Initialize` the launcher bootstraps the SDK's
+`dart:io` layer for CTR (patches 0034 and 0035) and starts its event handler;
+after the program it cleans the layer up before `Dart_Cleanup`. The isolate
+loads `dart:io` through the SDK's own `SetupDartIoLibrary`, so the I/O layer
+resolves every `dart:io` native and timers run on its event handler. Areas not
+yet ported fail with a catchable `OSError` naming the area ("<Area> is not
+supported on CTR (dart:io)"). `exit()` throws `UnsupportedError: This embedder
+disallows calling dart:io's exit()`. `print` and `Uri.base` still use the
+launcher's `_ctr` hooks. soc:U and its 1 MiB buffer are owned by
+`SocketService` (`link.cc`) and started only when a host link is requested.
+Apps link `lib/<mode>/io.a` between the launcher objects and the runtime
+archive. Host drivers keep the fallback resolver in
+`runtime/ctr/source/unsupported.cc`, which reports every `dart:io` native as
+unsupported; the host-VM driver accepts `CTR_TEST_VM_FLAG=--link_natives_lazily`
+to exercise AOT's native linking on the host JIT VM.
 
 ## Host checks
 

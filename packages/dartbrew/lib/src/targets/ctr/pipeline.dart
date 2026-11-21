@@ -245,6 +245,9 @@ Future<CtrBuild> buildCtrApplication({
     p.join(work.path, 'program.o'),
     p.join(work.path, 'payload.o'),
     sdk.asset(link['math'] as String),
+    // The SDK's dart:io layer for CTR: the launcher calls into it, and it
+    // calls the VM in the runtime archive.
+    sdk.asset(profile['io_archive'] as String),
     sdk.asset(profile['archive'] as String),
     ...assets('libraries'),
     '--start-group',

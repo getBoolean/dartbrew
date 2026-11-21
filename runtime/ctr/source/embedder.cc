@@ -1,10 +1,12 @@
 #include "embedder.h"
 #include "dart_native_api.h"
-#include "unsupported.h"
 #include <cstdlib>
 #include <cstring>
-#if !defined(__3DS__)
+#if defined(__3DS__)
+#include "bin/dart_io_api.h"
+#else
 #include <chrono>
+#include "unsupported.h"
 #endif
 namespace ctr {
 static Dart_Handle String(const char* text) { return Dart_NewStringFromCString(text); }
@@ -61,9 +63,26 @@ bool Embedder::Bootstrap() {
 #if !defined(DART_PRECOMPILED_RUNTIME)
   if (!Check(Dart_LoadScriptFromKernel(program_.kernel, program_.kernel_size))) return false;
 #endif
-  // An AOT image may omit an unused dart:io; then nothing can call its natives.
+  // An AOT image may omit an unused dart:io; then nothing can call its natives,
+  // and timers stay on the _ctr hooks' worker.
   Dart_Handle io = Library("dart:io");
-  if (!Dart_IsError(io) && !Check(Dart_SetNativeResolver(io, ResolveUnsupported, nullptr))) return false;
+  if (!Dart_IsError(io)) {
+#if defined(__3DS__)
+    // The SDK's own dart:io setup: the ported I/O layer's natives, and io's
+    // _setupHooks, which moves timers from the _ctr hooks to the dart:io event
+    // handler. print and Uri.base keep the _ctr closures set above.
+    dart::bin::DartIoSettings settings;
+    // exit() would reach Platform::_Exit, which is not ported yet; this makes
+    // it throw a catchable UnsupportedError in Dart first.
+    settings.disable_exit = true;
+    // There is no VM service to register the extension with.
+    settings.enable_network_profiling = false;
+    if (!Check(dart::bin::SetupDartIoLibrary(settings))) return false;
+#else
+    // Host drivers have no CTR I/O layer: every dart:io native is unsupported.
+    if (!Check(Dart_SetNativeResolver(io, ResolveUnsupported, nullptr))) return false;
+#endif
+  }
   Dart_Handle main = Dart_GetField(Dart_RootLibrary(), String("main"));
   if (!Check(main)) return false;
   Dart_Handle string_type = Dart_GetNonNullableType(Library("dart:core"), String("String"), 0, nullptr);

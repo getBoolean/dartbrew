@@ -51,6 +51,10 @@ def package(source, build, mode, payload, fixture, output,
     archive = build / 'obj/runtime' / ('libdart_aotruntime.a' if mode == 'aot' else 'libdart_jit.a')
     if not archive.is_file():
         raise RuntimeError(f'missing runtime archive: {archive}')
+    # The launcher calls the SDK's dart:io layer for CTR, which calls the VM.
+    io_archive = build / 'obj/runtime/bin/ctr/libdart_io.a'
+    if not io_archive.is_file():
+        raise RuntimeError(f'missing dart:io archive: {io_archive}')
     if not payload.is_file():
         raise RuntimeError(f'missing supplied payload: {payload}')
     if mode == 'jit':
@@ -135,7 +139,7 @@ def package(source, build, mode, payload, fixture, output,
     elf = work / 'application.elf'
     run([compiler, *profile['cflags'], *['-specs=' + str(path) for path in specs],
          '-Wl,--gc-sections', '-Wl,-Map=' + str(work / 'link.map'), *objects, math_component,
-         archive, '-L' + profile['libctru'] + '/lib', '-lctru', '-lm', '-o', elf])
+         io_archive, archive, '-L' + profile['libctru'] + '/lib', '-lctru', '-lm', '-o', elf])
     artifact = work / 'application.3dsx'
     run([converter, elf, artifact])
     # Detect input changes during compilation before attributing the package.

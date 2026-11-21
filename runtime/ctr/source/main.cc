@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include "bin/dart_io_api.h"
 #include "embedder.h"
 #include "input.h"
 #include "link.h"
@@ -65,14 +66,20 @@ int main(int argc, char** argv) {
     if (config) fclose(config);
   }
   // Connect before begin so every record reaches the host; a connect failure is
-  // reported as the first output record once begin has succeeded.
+  // reported as the first output record once begin has succeeded. Only the
+  // link uses soc:U today; dart:io's event handler makes no soc calls until
+  // sockets are registered with it.
+  ctr::SocketService sockets;
   ctr::Link link;
   std::string link_error;
-  if (identified && identity.host && link.Open(identity.address, identity.port, &link_error))
-    run.report.Attach(&link);
+  if (identified && identity.host) {
+    sockets.Start();
+    if (link.Open(sockets, identity.address, identity.port, &link_error))
+      run.report.Attach(&link);
+  }
   FILE* journal = fopen("sdmc:/ctr-runtime.log", "a");
   bool began = identified && run.report.Begin(identity, journal, ctr_program.build, link_error);
-  bool initialized = false, cleanup = true;
+  bool initialized = false, io = false, cleanup = true;
   ctr::Input input;
   if (began) {
     const bool input_ready = input.Start();
@@ -86,17 +93,22 @@ int main(int argc, char** argv) {
     }
     const bool precompiled = Dart_IsPrecompiledRuntime();
     bool mode = !strcmp(ctr_program.build.mode, precompiled ? "aot" : "jit");
+    const bool start = mode && input_ready;
     // Match the SDK AOT launcher: stack walking and native linking use this mode.
     const char* aot_flags[] = {"--precompilation"};
-    char* error = mode && input_ready ? Dart_SetVMFlags(precompiled ? 1 : 0,
-                                        precompiled ? aot_flags : nullptr) : nullptr;
+    char* error = start ? Dart_SetVMFlags(precompiled ? 1 : 0,
+                                          precompiled ? aot_flags : nullptr) : nullptr;
     if (!mode) run.report.Output("artifact mode differs from linked runtime");
     if (error) { run.report.Output(error); free(error); }
-    else if (mode && input_ready) {
+    else if (start) {
+      // dart:io's event handler thread, started before the VM as the SDK's
+      // embedder does.
+      dart::bin::BootstrapDartIo();
+      io = true;
       Dart_InitializeParams params = {};
       params.version = DART_INITIALIZE_PARAMS_CURRENT_VERSION;
       params.entropy_source = Entropy;
-      // No service/kernel isolate, dart:io bootstrap, or executable-page probe.
+      // No service/kernel isolate or executable-page probe.
       error = Dart_Initialize(&params);
       if (error) { run.report.Output(error); free(error); }
       else initialized = true;
@@ -129,14 +141,20 @@ int main(int argc, char** argv) {
         if (input_lost)
           run.report.Output("CTR input shared memory became unavailable");
       }
+      // The isolate is gone: stop the event handler before the VM, so no
+      // late timer or socket event posts into a VM being torn down.
+      dart::bin::CleanupDartIo();
+      io = false;
       error = Dart_Cleanup();
       if (error) { cleanup = false; run.report.Output(error); free(error); }
     }
+    if (io) dart::bin::CleanupDartIo();
     input.Stop();
     run.outcome = run.report.End(run.outcome, cleanup);
   }
   run.report.Attach(nullptr);
   link.Close();
+  sockets.Stop();
   if (journal && fclose(journal)) run.outcome = ctr::Outcome::fail;
   fsExit();
   gfxExit();

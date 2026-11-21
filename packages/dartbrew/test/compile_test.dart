@@ -218,6 +218,33 @@ void main() {
     expect(_json(p.join(project.output, 'artifact.json'))['mode'], 'jit');
   });
 
+  for (final mode in ['aot', 'jit']) {
+    test(
+      '$mode links the dart:io archive ahead of the runtime archive',
+      () async {
+        final sdk = ctrBuildSdk();
+        final project = _project();
+        await _compile(sdk, [
+          '--mode',
+          mode,
+          '-o',
+          project.output,
+          project.entry,
+        ]);
+        final link = [
+          for (final argument in sdk.calls('ld').single)
+            argument.replaceAll(r'\', '/'),
+        ];
+        int position(String suffix) =>
+            link.indexWhere((a) => a.endsWith(suffix));
+        final io = position('/runtime/$mode-io.a');
+        // The launcher objects call into the I/O layer, which calls the VM.
+        expect(io, greaterThan(position('/work/payload.o')));
+        expect(io, lessThan(position('/runtime/$mode.a')));
+      },
+    );
+  }
+
   test('compiles AOT when no mode is given', () async {
     final sdk = ctrBuildSdk();
     final project = _project();

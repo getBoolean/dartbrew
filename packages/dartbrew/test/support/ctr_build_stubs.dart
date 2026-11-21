@@ -79,6 +79,8 @@ FakeSdk ctrBuildSdk() => fakeSdk(
       'runtime/jit.o',
       'runtime/aot.a',
       'runtime/jit.a',
+      'runtime/aot-io.a',
+      'runtime/jit-io.a',
       'runtime/libm.a',
       'runtime/libctru.a',
       'runtime/libc.a',
@@ -96,6 +98,7 @@ FakeSdk ctrBuildSdk() => fakeSdk(
           'compatibility': (mode == 'aot' ? 'a' : 'b') * 64,
           'objects': ['runtime/$mode.o'],
           'archive': 'runtime/$mode.a',
+          'io_archive': 'runtime/$mode-io.a',
         },
     },
     'link': {
