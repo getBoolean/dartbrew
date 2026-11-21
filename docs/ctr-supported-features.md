@@ -22,17 +22,19 @@ exact-artifact passes, each with successful cleanup and a terminal pass.
 
 ## Unsupported API failure shapes
 
-`dart:io` has no CTR implementation. The launcher attaches a fallback native
-resolver to `dart:io`, so calling any of it (files, directories, sockets,
-processes, stdout/stdin, `exit()`, `sleep()`, `Platform`, `HttpClient`) throws
-a catchable `UnsupportedError` with the text `Unsupported operation:
-<NativeName> is not supported on CTR (dart:io)`. The run continues, and
-`dartbrew test` reports an uncaught one as a failed test naming the area.
+The launcher now loads the SDK's own `dart:io` layer, ported to CTR (patches
+0034 and 0035), so `dart:io` calls reach real platform code. Areas not yet
+implemented fail in the shape the Dart API gives for an operating-system error,
+with the OS error text `<Area> is not supported on CTR (dart:io)`: file calls
+throw `FileSystemException`, sockets `SocketException`, and so on. All of them
+are catchable and the run continues. Timers run on the `dart:io` event handler.
 
-Observed on a New 3DS on 2026-11-19 with `test/programs/unsupported_apis.dart`,
-run through `dartbrew run` with the schema-2 launcher. AOT and JIT behaved the
-same. On 2026-11-20 the same probe ran in Azahar 2126.2 (Windows, MSVC build) in
-AOT and gave identical results.
+Observed on 2026-11-21 with `test/programs/unsupported_apis.dart` through
+`dartbrew run`, on a New 3DS in AOT and JIT and in Azahar 2126.2 in AOT; all
+three gave the same results. A timer check (a 100 ms timer while the main
+isolate spins for 2 s) fired after the loop in every environment, so the event
+handler neither starved the loop nor lost the timer. Before the I/O layer was
+linked, every `dart:io` native threw `UnsupportedError` naming the native.
 
 Azahar runs AOT only. The JIT VM publishes compiled code with Luma3DS's custom
 cache SVC; Azahar doesn't emulate it (`svcGetSystemInfo(0x10000)` fails) and the
@@ -40,16 +42,17 @@ VM aborts right after `begin`. `dartbrew run -d azahar` and `test -d azahar`
 therefore default to AOT and refuse `--mode jit`. The hello, async, exceptions
 and gc_stress fixtures pass in Azahar AOT through `dartbrew run --verdict`.
 
-| Area | Console (AOT and JIT) | Azahar |
-| --- | --- | --- |
-| File read | Catchable `UnsupportedError`: `Namespace_GetDefault` | Same (AOT) |
-| Socket connect | Catchable `UnsupportedError`: `InternetAddress_Parse` | Same (AOT) |
-| `Process.run` | Catchable `UnsupportedError`: `Platform_OperatingSystem` | Same (AOT) |
-| `Isolate.spawn` | Catchable `UnsupportedError`: `Isolate.spawn` | Same (AOT) |
-| `DynamicLibrary.open` (FFI) | Catchable `ArgumentError`: loading dynamic libraries is not supported | Same (AOT) |
-| `stdout.write` | Catchable `UnsupportedError`: `File_GetStdioHandleType` | Same (AOT) |
-| `exit` | `UnsupportedError`: `Process_Exit`. Uncaught, so the run ends as fail with a full stack trace | Same (AOT) |
-| `package:test` files with `dartbrew test` | Run and report per test in AOT and JIT. An 18.9 MB JIT test app uploads once Wi-Fi interference is reduced | Run and report per test in AOT, with full stack traces; a fresh `dartbrew create` project passes |
+| Area | Console (AOT and JIT) and Azahar (AOT) |
+| --- | --- |
+| File read | Catchable `FileSystemException`: Cannot open file (OS Error: File is not supported on CTR (dart:io)) |
+| Socket connect | Catchable `SocketException`: Failed host lookup (OS Error: InternetAddress is not supported on CTR (dart:io)) |
+| `Process.run` | Catchable `OSError`: Failed to retrieve environment variables |
+| `Isolate.spawn` | Catchable `UnsupportedError`: `Isolate.spawn` |
+| `DynamicLibrary.open` (FFI) | Catchable `ArgumentError`: loading dynamic libraries is not supported |
+| `stdout.write` | Catchable `FileSystemException`: Failed to get type of stdio handle (OS Error: File is not supported on CTR (dart:io)) |
+| `exit` | `UnsupportedError`: This embedder disallows calling dart:io's exit(). Uncaught, so the run ends as fail with a full stack trace |
+
+`package:test` files run with `dartbrew test` and report per test (observed 2026-11-19/20 before the I/O layer was linked): on the console in AOT and JIT, where an 18.9 MB JIT test app uploads once Wi-Fi interference is reduced, and in Azahar in AOT, where a fresh `dartbrew create` project passes.
 
 `Uri.base` is `file:///` on CTR (SDK patch 0033, installed by the launcher), so
 `package:path` and `package:stack_trace` work and failing tests report full
