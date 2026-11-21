@@ -58,6 +58,21 @@ native SDK.
   registered it polls in 10 ms slices. `dart:io` threads are libctru threads at
   priority 0x2F on core 0. The 35-patch tree is
   `50b6acd417cdda5fb6eefd0aeec8ec20c4c867de`.
+- Scheduling and memory spike (2026-11-21, New 3DS; log in
+  `runtime/ctr/test/scheduling/results-2026-11-21.log`). Without yields, a busy
+  thread starves another at the same priority on its core for the whole run, so
+  an isolate in a tight loop would freeze timers and the event loop. A periodic
+  `svcSleepThread(0)` does yield to equal-priority threads: yielding every 1 ms
+  kept a 50 ms heartbeat within 3 ms and an echo within 11 ms, every 10 ms within
+  20 ms. Core 2 is usable by the app; core 1 only after
+  `APT_SetAppCpuTimeLimit`. Spreading busy threads over cores 0 and 2 with a
+  short yield every 10 ms nearly doubled throughput (about 261k iterations/s per
+  thread versus 143k sharing core 0) and stayed within 17 ms. **Decision:** Dart
+  mutator threads yield periodically (at VM safepoint or interrupt checks, about
+  every 1-10 ms), the main isolate stays on core 0, and spawned isolates and VM
+  helpers may run on core 2; core 1 is not used. This lands with isolates (U10).
+  The app has about 96 MB of heap and 32 MB of linear memory (app memory type
+  6, 124 MB region), and 28 of its 32 threads free at start.
 - The compiled Linux SDK built hello, async, GC stress, exceptions and focused
   numerics in both AOT and JIT modes. Networking was disabled, the SDK mount was
   read-only, no source SDK checkout was mounted and PATH contained only bundled
