@@ -7,6 +7,10 @@ Run before uploading to a GitHub release:
 Every archive must be named dartbrew-<version>-<host>.zip for the version in
 release/preview.json, and its SHA-256 must match a passing host entry in the
 committed qualification results for that same version.
+
+From 0.1.0-preview.5 on, results.json must also list features. Each feature
+must pass on console_aot, console_jit and azahar_aot, or be not_applicable
+there with a reason. See docs/qualification/README.md.
 """
 import argparse
 import hashlib
@@ -15,6 +19,9 @@ from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+ENVIRONMENTS = ('console_aot', 'console_jit', 'azahar_aot')
+# Published before per-feature results existed; their results.json has no features.
+WITHOUT_FEATURES = {f'0.1.0-preview.{n}' for n in range(1, 5)}
 
 
 def digest(path):
@@ -39,7 +46,24 @@ def check_release(results_path, archives, version=None):
             raise ValueError(f'{archive.name} did not pass qualification')
         if digest(archive) != entry.get('sdk_sha256'):
             raise ValueError(f'{archive.name} differs from the qualified bytes')
+    if version not in WITHOUT_FEATURES:
+        check_features(results.get('features'), version)
     return [Path(archive).name for archive in archives]
+
+
+def check_features(features, version):
+    if not features:
+        raise ValueError(f'qualification results for {version} have no features')
+    for feature in features:
+        name = feature.get('name')
+        for environment in ENVIRONMENTS:
+            outcome = feature.get('results', {}).get(environment)
+            if outcome == 'pass':
+                continue
+            if (isinstance(outcome, dict) and outcome.get('result') == 'not_applicable'
+                    and str(outcome.get('reason', '')).strip()):
+                continue
+            raise ValueError(f'feature {name} did not pass on {environment}: {json.dumps(outcome)}')
 
 
 if __name__ == '__main__':

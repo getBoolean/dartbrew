@@ -12,7 +12,7 @@ The console runs Luma3DS. Rosalina's **InputRedirection** accepts button presses
 - The console's IP address (shown on the Homebrew Launcher netloader screen, or in Rosalina).
 - InputRedirection on: Rosalina menu (L + Down + Select) -> Miscellaneous options -> InputRedirection. **It turns off after a reboot, a sleep or a Wi-Fi reconnect, and sometimes after an app run.** Verify arming before every upload (Y, then `dartbrew devices`). Stop and ask the user to re-enable it when presses stop landing; don't keep uploading.
 - Homebrew Launcher open on the console (the netloader is part of it).
-- Windows Firewall allowing the dartbrew executable inbound on TCP and UDP 17491. Windows creates **Block** rules automatically the first time a new exe listens; a moved or rebuilt SDK path gets new rules. Check with `Get-NetFirewallRule -DisplayName dartbrew`.
+- Windows Firewall allowing the dartbrew executable inbound on TCP and UDP 17491. Windows creates **Block** rules automatically the first time a new exe listens; a moved or rebuilt SDK path gets new rules. Check with `Get-NetFirewallRule -DisplayName dartbrew`. A port rule for inbound TCP and UDP 17491 (not tied to an exe path) avoids the per-path approvals: `New-NetFirewallRule -DisplayName 'dartbrew 17491 TCP' -Direction Inbound -Protocol TCP -LocalPort 17491 -Action Allow`, and the same with `-Protocol UDP`.
 
 ## Pressing buttons
 
@@ -41,3 +41,11 @@ Each button is held about 150 ms, then released. Buttons: A B X Y L R START SELE
 - **A dropped console** (ping says host unreachable, port 8000 closed) means it slept, lost Wi-Fi or changed address. Ask the user. After it returns, InputRedirection and BootNTR may both need re-enabling.
 - Netloader errors on screen read `<function>:<errno>`, from hbmenu's `source/ui/netloader.c` (fincs/new-hbmenu): for example `recv:19`, `chunksize:<n>`, `inflate:<n>`. Read that file before guessing at protocol bugs.
 - A console link with 200-700 ms ping is normal for 3DS Wi-Fi. A large JIT app (about 14 MB, 5 MB compressed) takes much longer to upload than on a desktop LAN.
+
+## Notes for networking fixtures and spikes
+
+- **Networking fixtures need a host peer.** Socket, DNS, HTTP and TLS fixtures talk to a server on the PC, so the PC must be reachable from the console on the same subnet (no NAT in between), with its firewall open for the fixture's port.
+- **A netloader error dialog blocks arming.** While a dialog such as `recv:19` or `inflate:-3` (a corrupted upload) is showing, Y does nothing. Press B to clear it, then Y.
+- **When arming keeps failing, `press.py <ip> B Y` is safe.** B clears an error dialog or cancels a waiting netloader, and Y re-arms it. Confirm with `dartbrew devices --wait 5`.
+- **A plain .3dsx spike can serve its log over TCP.** The console listens and the PC connects out to it, so no firewall rule is needed on the PC. That spike serves on TCP 17500 for 90 s (START skips); read it with `curl --max-time 10 telnet://<ip>:17500` or any TCP client. See `serve_log` in `runtime/ctr/test/loader/ctr_main.c`.
+- **BootNTR's port 8000 is a safe network-up check** (a TCP connect there does not disturb anything), unlike port 17491.
