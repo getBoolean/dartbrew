@@ -1,0 +1,911 @@
+diff --git a/runtime/bin/eventhandler_ctr.cc b/runtime/bin/eventhandler_ctr.cc
+old mode 100644
+new mode 100755
+index a47a7fc5..83f7b135
+--- a/runtime/bin/eventhandler_ctr.cc
++++ b/runtime/bin/eventhandler_ctr.cc
+@@ -6,26 +6,274 @@
+ #if defined(DART_HOST_OS_CTR)
+ 
+ #include "bin/eventhandler.h"
++#include "bin/eventhandler_ctr.h"
+ 
+-#include "platform/assert.h"
++#include <errno.h>   // NOLINT
++#include <poll.h>    // NOLINT
++#include <string.h>  // NOLINT
++
++#include "bin/dartutils.h"
++#include "bin/lockers.h"
++#include "bin/process.h"
++#include "bin/socket.h"
++#include "bin/thread.h"
++#include "bin/utils.h"
++#include "platform/syslog.h"
++#include "platform/utils.h"
+ 
+ namespace dart {
+ namespace bin {
+ 
++intptr_t DescriptorInfo::GetPollEvents() {
++  // poll() reports POLLERR, POLLHUP and POLLNVAL without asking.
++  intptr_t events = 0;
++  if ((Mask() & (1 << kInEvent)) != 0) {
++    events |= POLLIN;
++  }
++  if ((Mask() & (1 << kOutEvent)) != 0) {
++    events |= POLLOUT;
++  }
++  return events;
++}
++
++int64_t EventHandlerImplementation::Now() {
++  return TimerUtils::GetCurrentMonotonicMillis();
++}
++
++EventHandlerImplementation::EventHandlerImplementation()
++    : socket_map_(&SimpleHashMap::SamePointerValue, 16), poll_set_(Now) {
++  shutdown_ = false;
++}
++
++static void DeleteDescriptorInfo(void* info) {
++  DescriptorInfo* di = reinterpret_cast<DescriptorInfo*>(info);
++  di->Close();
++  delete di;
++}
++
++EventHandlerImplementation::~EventHandlerImplementation() {
++  socket_map_.Clear(DeleteDescriptorInfo);
++}
++
++void EventHandlerImplementation::UpdatePollSet(intptr_t old_mask,
++                                               DescriptorInfo* di) {
++  if (di->Mask() != old_mask) {
++    poll_set_.Update(di->fd(), di->GetPollEvents(), !di->IsListeningSocket());
++  }
++}
++
++DescriptorInfo* EventHandlerImplementation::GetDescriptorInfo(
++    intptr_t fd,
++    bool is_listening) {
++  ASSERT(fd >= 0);
++  SimpleHashMap::Entry* entry = socket_map_.Lookup(
++      GetHashmapKeyFromFd(fd), GetHashmapHashFromFd(fd), true);
++  ASSERT(entry != nullptr);
++  DescriptorInfo* di = reinterpret_cast<DescriptorInfo*>(entry->value);
++  if (di == nullptr) {
++    // If there is no data in the hash map for this file descriptor a
++    // new DescriptorInfo for the file descriptor is inserted.
++    if (is_listening) {
++      di = new DescriptorInfoMultiple(fd);
++    } else {
++      di = new DescriptorInfoSingle(fd);
++    }
++    entry->value = di;
++  }
++  ASSERT(fd == di->fd());
++  return di;
++}
++
++void EventHandlerImplementation::Rearm(intptr_t fd, intptr_t events) {
++  int poll_events = 0;
++  if ((events & (1 << kInEvent)) != 0) {
++    poll_events |= POLLIN;
++  }
++  if ((events & (1 << kOutEvent)) != 0) {
++    poll_events |= POLLOUT;
++  }
++  poll_set_.Rearm(fd, poll_events);
++}
++
++void EventHandlerImplementation::HandleMessages() {
++  for (intptr_t i = 0; i < poll_set_.message_count(); i++) {
++    const CtrPollSet::Message& msg = poll_set_.message(i);
++    if (msg.id == kTimerId) {
++      poll_set_.SetTimer(msg.dart_port, msg.data);
++    } else if (msg.id == kShutdownId) {
++      shutdown_ = true;
++    } else {
++      ASSERT((msg.data & COMMAND_MASK) != 0);
++      Socket* socket = reinterpret_cast<Socket*>(msg.id);
++      RefCntReleaseScope<Socket> rs(socket);
++      if (socket->fd() == -1) {
++        continue;
++      }
++      DescriptorInfo* di =
++          GetDescriptorInfo(socket->fd(), IS_LISTENING_SOCKET(msg.data));
++      if (IS_COMMAND(msg.data, kShutdownReadCommand)) {
++        ASSERT(!di->IsListeningSocket());
++        // Close the socket for reading.
++        VOID_NO_RETRY_EXPECTED(shutdown(di->fd(), SHUT_RD));
++      } else if (IS_COMMAND(msg.data, kShutdownWriteCommand)) {
++        ASSERT(!di->IsListeningSocket());
++        // Close the socket for writing.
++        VOID_NO_RETRY_EXPECTED(shutdown(di->fd(), SHUT_WR));
++      } else if (IS_COMMAND(msg.data, kCloseCommand)) {
++        // Close the socket and free system resources and move on to next
++        // message.
++        if (IS_SIGNAL_SOCKET(msg.data)) {
++          Process::ClearSignalHandlerByFd(di->fd(), socket->isolate_port());
++        }
++        intptr_t old_mask = di->Mask();
++        Dart_Port port = msg.dart_port;
++        if (port != ILLEGAL_PORT) {
++          di->RemovePort(port);
++        }
++        intptr_t new_mask = di->Mask();
++        UpdatePollSet(old_mask, di);
++
++        intptr_t fd = di->fd();
++        ASSERT(fd == socket->fd());
++        if (di->IsListeningSocket()) {
++          // We only close the socket file descriptor from the operating
++          // system if there are no other dart socket objects which
++          // are listening on the same (address, port) combination.
++          ListeningSocketRegistry* registry =
++              ListeningSocketRegistry::Instance();
++
++          MutexLocker locker(registry->mutex());
++
++          if (registry->CloseSafe(socket)) {
++            ASSERT(new_mask == 0);
++            socket_map_.Remove(GetHashmapKeyFromFd(fd),
++                               GetHashmapHashFromFd(fd));
++            di->Close();
++            delete di;
++          }
++          socket->CloseFd();
++        } else {
++          ASSERT(new_mask == 0);
++          socket_map_.Remove(GetHashmapKeyFromFd(fd), GetHashmapHashFromFd(fd));
++          di->Close();
++          delete di;
++          socket->CloseFd();
++        }
++        DartUtils::PostInt32(port, 1 << kDestroyedEvent);
++      } else if (IS_COMMAND(msg.data, kReturnTokenCommand)) {
++        int count = TOKEN_COUNT(msg.data);
++        intptr_t old_mask = di->Mask();
++        di->ReturnTokens(msg.dart_port, count);
++        UpdatePollSet(old_mask, di);
++      } else if (IS_COMMAND(msg.data, kSetEventMaskCommand)) {
++        // `events` can only have kInEvent/kOutEvent flags set.
++        intptr_t events = msg.data & EVENT_MASK;
++        ASSERT(0 == (events & ~(1 << kInEvent | 1 << kOutEvent)));
++
++        intptr_t old_mask = di->Mask();
++        di->SetPortAndMask(msg.dart_port, msg.data & EVENT_MASK);
++        UpdatePollSet(old_mask, di);
++      } else {
++        UNREACHABLE();
++      }
++    }
++  }
++}
++
++intptr_t EventHandlerImplementation::GetPollEvents(intptr_t events,
++                                                   DescriptorInfo* di) {
++  if ((events & POLLNVAL) != 0) {
++    // As on Linux when epoll rejects a descriptor: report it closed.
++    return 1 << kCloseEvent;
++  }
++  if ((events & POLLERR) != 0) {
++    // Return error only if POLLIN is present, as on Linux.
++    return ((events & POLLIN) != 0) ? (1 << kErrorEvent) : 0;
++  }
++  intptr_t event_mask = 0;
++  if ((events & POLLIN) != 0) {
++    event_mask |= (1 << kInEvent);
++  }
++  if ((events & POLLOUT) != 0) {
++    event_mask |= (1 << kOutEvent);
++  }
++  if ((events & POLLHUP) != 0) {
++    event_mask |= (1 << kCloseEvent);
++  }
++  return event_mask;
++}
++
++void EventHandlerImplementation::HandleEvents() {
++  for (intptr_t i = 0; i < poll_set_.ready_count(); i++) {
++    const CtrPollSet::Ready& ready = poll_set_.ready(i);
++    SimpleHashMap::Entry* entry =
++        socket_map_.Lookup(GetHashmapKeyFromFd(ready.fd),
++                           GetHashmapHashFromFd(ready.fd), false);
++    if (entry == nullptr) continue;
++    DescriptorInfo* di = reinterpret_cast<DescriptorInfo*>(entry->value);
++    const intptr_t old_mask = di->Mask();
++    const intptr_t event_mask = GetPollEvents(ready.revents, di);
++    // Errors and invalid descriptors go to every listener, as on Linux.
++    if ((event_mask & (1 << kErrorEvent)) != 0 ||
++        (ready.revents & POLLNVAL) != 0) {
++      di->NotifyAllDartPorts(event_mask);
++      UpdatePollSet(old_mask, di);
++    } else if (event_mask != 0) {
++      Dart_Port port = di->NextNotifyDartPort(event_mask);
++      ASSERT(port != 0);
++      UpdatePollSet(old_mask, di);
++      DartUtils::PostInt32(port, event_mask);
++    }
++  }
++  for (intptr_t i = 0; i < poll_set_.timer_count(); i++) {
++    DartUtils::PostNull(poll_set_.timer(i));
++  }
++  // Handle messages after socket events, so we avoid closing a socket before
++  // we handle the current events.
++  HandleMessages();
++}
++
++void EventHandlerImplementation::Poll(uword args) {
++  EventHandler* handler = reinterpret_cast<EventHandler*>(args);
++  EventHandlerImplementation* handler_impl = &handler->delegate_;
++  ASSERT(handler_impl != nullptr);
++
++  while (!handler_impl->shutdown_) {
++    // This thread runs above the Dart threads and the console does not
++    // time-slice, so a failing poll() must not turn into a busy loop.
++    if (!handler_impl->poll_set_.Wait()) {
++      FATAL("dart:io event handler poll failed: %d (%s)", errno,
++            strerror(errno));
++    }
++    handler_impl->HandleEvents();
++  }
++  DEBUG_ASSERT(ReferenceCounted<Socket>::instances() == 0);
++  handler->NotifyShutdownDone();
++}
++
++void EventHandlerImplementation::Start(EventHandler* handler) {
++  Thread::Start("dart:io EventHandler", &EventHandlerImplementation::Poll,
++                reinterpret_cast<uword>(handler));
++}
++
++void EventHandlerImplementation::Shutdown() {
++  SendData(kShutdownId, 0, 0);
++}
++
+ void EventHandlerImplementation::SendData(intptr_t id,
+                                           Dart_Port dart_port,
+                                           int64_t data) {
+-  UNREACHABLE();
++  poll_set_.Send(id, dart_port, data);
+ }
+ 
+-// EventHandler::Stop waits for a shutdown notice from the handler's own
+-// thread, so a handler without a thread cannot start cleanly.
+-void EventHandlerImplementation::Start(EventHandler* handler) {
+-  FATAL("The dart:io event handler is not supported on CTR");
++void* EventHandlerImplementation::GetHashmapKeyFromFd(intptr_t fd) {
++  // The hashmap does not support keys with value 0.
++  return reinterpret_cast<void*>(fd + 1);
+ }
+ 
+-void EventHandlerImplementation::Shutdown() {
+-  UNREACHABLE();
++uint32_t EventHandlerImplementation::GetHashmapHashFromFd(intptr_t fd) {
++  // The hashmap does not support keys with value 0.
++  return dart::Utils::WordHash(fd + 1);
+ }
+ 
+ }  // namespace bin
+diff --git a/runtime/bin/eventhandler_ctr.h b/runtime/bin/eventhandler_ctr.h
+old mode 100644
+new mode 100755
+index 1d689c1a..e16c48a3
+--- a/runtime/bin/eventhandler_ctr.h
++++ b/runtime/bin/eventhandler_ctr.h
+@@ -9,24 +9,88 @@
+ #error Do not include eventhandler_ctr.h directly; use eventhandler.h instead.
+ #endif
+ 
++#include <errno.h>
++#include <sys/socket.h>
++#include <unistd.h>
++
++#include "bin/eventhandler_ctr_poll.h"
++#include "platform/hashmap.h"
++
+ namespace dart {
+ namespace bin {
+ 
+-class EventHandler;
++class DescriptorInfo : public DescriptorInfoBase {
++ public:
++  explicit DescriptorInfo(intptr_t fd) : DescriptorInfoBase(fd) {}
++
++  virtual ~DescriptorInfo() {}
++
++  intptr_t GetPollEvents();
++
++  virtual void Close() {
++    close(fd_);
++    fd_ = -1;
++  }
+ 
+-// Placeholder until the CTR event handler is ported: starting it aborts the
+-// process with a message instead of leaving dart:io waiting on events that
+-// would never arrive.
++ private:
++  DISALLOW_COPY_AND_ASSIGN(DescriptorInfo);
++};
++
++class DescriptorInfoSingle : public DescriptorInfoSingleMixin<DescriptorInfo> {
++ public:
++  explicit DescriptorInfoSingle(intptr_t fd) : DescriptorInfoSingleMixin(fd) {}
++  virtual ~DescriptorInfoSingle() {}
++
++ private:
++  DISALLOW_COPY_AND_ASSIGN(DescriptorInfoSingle);
++};
++
++class DescriptorInfoMultiple
++    : public DescriptorInfoMultipleMixin<DescriptorInfo> {
++ public:
++  explicit DescriptorInfoMultiple(intptr_t fd)
++      : DescriptorInfoMultipleMixin(fd) {}
++  virtual ~DescriptorInfoMultiple() {}
++
++ private:
++  DISALLOW_COPY_AND_ASSIGN(DescriptorInfoMultiple);
++};
++
++// The structure of eventhandler_linux.cc over CtrPollSet: poll() instead of
++// epoll, a locked queue and condition variable instead of the interrupt pipe
++// and the set's timers instead of a timerfd.
+ class EventHandlerImplementation {
+  public:
+-  EventHandlerImplementation() {}
+-  ~EventHandlerImplementation() {}
++  EventHandlerImplementation();
++  ~EventHandlerImplementation();
++
++  void UpdatePollSet(intptr_t old_mask, DescriptorInfo* di);
+ 
++  // Gets the socket data structure for a given file
++  // descriptor. Creates a new one if one is not found.
++  DescriptorInfo* GetDescriptorInfo(intptr_t fd, bool is_listening);
+   void SendData(intptr_t id, Dart_Port dart_port, int64_t data);
+   void Start(EventHandler* handler);
+   void Shutdown();
+ 
++  // Any thread. Sockets report readiness once, like EPOLLET on Linux; after a
++  // socket read, accepted or wrote, this returns |events| (1 << kInEvent
++  // and/or 1 << kOutEvent) for |fd| to the poll set.
++  void Rearm(intptr_t fd, intptr_t events);
++
+  private:
++  static void Poll(uword args);
++  void HandleEvents();
++  void HandleMessages();
++  intptr_t GetPollEvents(intptr_t events, DescriptorInfo* di);
++  static int64_t Now();
++  static void* GetHashmapKeyFromFd(intptr_t fd);
++  static uint32_t GetHashmapHashFromFd(intptr_t fd);
++
++  SimpleHashMap socket_map_;
++  CtrPollSet poll_set_;
++  bool shutdown_;
++
+   DISALLOW_COPY_AND_ASSIGN(EventHandlerImplementation);
+ };
+ 
+diff --git a/runtime/bin/eventhandler_ctr_poll.cc b/runtime/bin/eventhandler_ctr_poll.cc
+new file mode 100755
+index 00000000..28e4cf09
+--- /dev/null
++++ b/runtime/bin/eventhandler_ctr_poll.cc
+@@ -0,0 +1,279 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "platform/globals.h"
++#if defined(DART_HOST_OS_CTR) || defined(DART_CTR_POLL_HOST_TEST)
++
++#include "bin/eventhandler_ctr_poll.h"
++
++#include <errno.h>       // NOLINT
++#include <limits.h>      // NOLINT
++#include <poll.h>        // NOLINT
++#include <stdlib.h>      // NOLINT
++
++#if !defined(__3DS__)
++#include <chrono>
++#endif
++
++namespace dart {
++namespace bin {
++
++namespace {
++
++// Grows |*items| to hold at least |count| elements. Allocation failure is
++// fatal, as for the VM's own allocations.
++template <typename T>
++void Reserve(T** items, intptr_t* capacity, intptr_t count) {
++  if (count <= *capacity) return;
++  intptr_t grown = *capacity == 0 ? 8 : *capacity * 2;
++  while (grown < count) grown *= 2;
++  T* resized = static_cast<T*>(realloc(*items, grown * sizeof(T)));
++  if (resized == nullptr) abort();
++  *items = resized;
++  *capacity = grown;
++}
++
++constexpr int kInterest = POLLIN | POLLOUT;
++constexpr int kTerminal = POLLHUP | POLLERR | POLLNVAL;
++
++}  // namespace
++
++CtrPollSet::CtrPollSet(Clock clock) : clock_(clock) {
++#if defined(__3DS__)
++  LightLock_Init(&lock_);
++  CondVar_Init(&changed_);
++#endif
++}
++
++CtrPollSet::~CtrPollSet() {
++  free(entries_);
++  free(queued_);
++  free(fds_);
++  free(timers_);
++  free(ready_);
++  free(delivered_);
++  free(due_);
++}
++
++void CtrPollSet::Lock() {
++#if defined(__3DS__)
++  LightLock_Lock(&lock_);
++#else
++  lock_.lock();
++#endif
++}
++
++void CtrPollSet::Unlock() {
++#if defined(__3DS__)
++  LightLock_Unlock(&lock_);
++#else
++  lock_.unlock();
++#endif
++}
++
++// Called with lock_ held.
++void CtrPollSet::Signal() {
++#if defined(__3DS__)
++  CondVar_Signal(&changed_);
++#else
++  changed_.notify_one();
++#endif
++}
++
++// Called with lock_ held; releases it while waiting. |timeout| < 0 waits
++// until signalled.
++void CtrPollSet::Sleep(int timeout) {
++#if defined(__3DS__)
++  if (timeout < 0) {
++    CondVar_Wait(&changed_, &lock_);
++  } else {
++    CondVar_WaitTimeout(&changed_, &lock_, static_cast<s64>(timeout) * 1000000);
++  }
++#else
++  std::unique_lock<std::mutex> lock(lock_, std::adopt_lock);
++  if (timeout < 0) {
++    changed_.wait(lock);
++  } else {
++    changed_.wait_for(lock, std::chrono::milliseconds(timeout));
++  }
++  lock.release();
++#endif
++}
++
++void CtrPollSet::Send(intptr_t id, int64_t dart_port, int64_t data) {
++  Lock();
++  Reserve(&queued_, &queued_capacity_, queued_count_ + 1);
++  queued_[queued_count_++] = {id, dart_port, data};
++  Signal();
++  Unlock();
++}
++
++CtrPollSet::Entry* CtrPollSet::Find(intptr_t fd) {
++  for (intptr_t i = 0; i < entry_count_; i++) {
++    if (entries_[i].fd == fd) return &entries_[i];
++  }
++  return nullptr;
++}
++
++void CtrPollSet::Rearm(intptr_t fd, int events) {
++  Lock();
++  Entry* entry = Find(fd);
++  if (entry != nullptr && (entry->suppressed & events) != 0) {
++    entry->suppressed &= ~events;
++    dirty_ = true;
++    Signal();
++  }
++  Unlock();
++}
++
++void CtrPollSet::Update(intptr_t fd, int events, bool edge_triggered) {
++  events &= kInterest;
++  Lock();
++  Entry* entry = Find(fd);
++  if (events == 0) {
++    if (entry != nullptr) {
++      *entry = entries_[--entry_count_];
++      dirty_ = true;
++    }
++  } else if (entry == nullptr || entry->events != events ||
++             entry->edge_triggered != edge_triggered) {
++    if (entry == nullptr) {
++      Reserve(&entries_, &entry_capacity_, entry_count_ + 1);
++      entry = &entries_[entry_count_++];
++    }
++    *entry = {fd, events, 0, edge_triggered, false};
++    dirty_ = true;
++  }
++  Unlock();
++}
++
++void CtrPollSet::SetTimer(int64_t dart_port, int64_t deadline) {
++  for (intptr_t i = 0; i < timer_count_; i++) {
++    if (timers_[i].dart_port == dart_port) {
++      if (deadline < 0) {
++        timers_[i] = timers_[--timer_count_];
++      } else {
++        timers_[i].deadline = deadline;
++      }
++      return;
++    }
++  }
++  if (deadline < 0) return;
++  Reserve(&timers_, &timer_capacity_, timer_count_ + 1);
++  timers_[timer_count_++] = {dart_port, deadline};
++}
++
++void CtrPollSet::Add(intptr_t fd, int events) {
++  // Field by field: pollfd's field types differ between libctru and POSIX.
++  pollfd& item = fds_[fd_count_++];
++  item.fd = static_cast<int>(fd);
++  item.events = events;
++  item.revents = 0;
++}
++
++// Called with lock_ held.
++void CtrPollSet::Rebuild() {
++  Reserve(&fds_, &fd_capacity_, entry_count_);
++  fd_count_ = 0;
++  for (intptr_t i = 0; i < entry_count_; i++) {
++    const Entry& entry = entries_[i];
++    const int events = entry.events & ~entry.suppressed;
++    if (entry.closed || events == 0) continue;
++    Add(entry.fd, events);
++  }
++  dirty_ = false;
++}
++
++int CtrPollSet::Timeout() {
++  if (timer_count_ == 0) return -1;
++  int64_t deadline = timers_[0].deadline;
++  for (intptr_t i = 1; i < timer_count_; i++) {
++    if (timers_[i].deadline < deadline) deadline = timers_[i].deadline;
++  }
++  const int64_t remaining = deadline - clock_();
++  if (remaining <= 0) return 0;
++  return remaining > INT_MAX ? INT_MAX : static_cast<int>(remaining);
++}
++
++// Called with lock_ held after poll() returned |polled| ready descriptors.
++void CtrPollSet::Collect(intptr_t polled) {
++  for (intptr_t i = 0; polled > 0 && i < fd_count_; i++) {
++    const int revents = fds_[i].revents;
++    if (revents == 0) continue;
++    Entry* entry = Find(fds_[i].fd);
++    if (entry == nullptr) continue;
++    const int reported = revents & (entry->events | kTerminal);
++    if (reported == 0) continue;
++    if (entry->edge_triggered) entry->suppressed |= reported & kInterest;
++    // Listening sockets are level-triggered, but a terminal condition never
++    // clears either.
++    if ((reported & kTerminal) != 0) entry->closed = true;
++    dirty_ = true;
++    Reserve(&ready_, &ready_capacity_, ready_count_ + 1);
++    ready_[ready_count_++] = {entry->fd, reported};
++  }
++}
++
++// Called with lock_ held.
++void CtrPollSet::TakeMessages() {
++  Message* swap = delivered_;
++  const intptr_t swap_capacity = delivered_capacity_;
++  delivered_ = queued_;
++  delivered_capacity_ = queued_capacity_;
++  delivered_count_ = queued_count_;
++  queued_ = swap;
++  queued_capacity_ = swap_capacity;
++  queued_count_ = 0;
++}
++
++bool CtrPollSet::Wait() {
++  // A wake-up that only re-armed a descriptor rebuilds the set and waits
++  // again, so every return has something to report.
++  do {
++    ready_count_ = 0;
++    Lock();
++    if (dirty_) Rebuild();
++    int timeout = Timeout();
++    if (fd_count_ == 0) {
++      // Nothing to poll: Send and Rearm signal under the same lock, so no
++      // wake-up is lost between the checks and the wait.
++      if (queued_count_ == 0 && timeout != 0) Sleep(timeout);
++      TakeMessages();
++      Unlock();
++    } else {
++      if (queued_count_ != 0) {
++        timeout = 0;
++      } else if (timeout < 0 || timeout > kPollSliceMillis) {
++        timeout = kPollSliceMillis;
++      }
++      Unlock();
++      int polled;
++      do {
++        polled = poll(fds_, fd_count_, timeout);
++      } while (polled < 0 && errno == EINTR);
++      if (polled < 0) return false;
++      Lock();
++      Collect(polled);
++      TakeMessages();
++      Unlock();
++    }
++    due_count_ = 0;
++    const int64_t now = clock_();
++    for (intptr_t i = 0; i < timer_count_;) {
++      if (timers_[i].deadline <= now) {
++        Reserve(&due_, &due_capacity_, due_count_ + 1);
++        due_[due_count_++] = timers_[i].dart_port;
++        timers_[i] = timers_[--timer_count_];
++      } else {
++        i++;
++      }
++    }
++  } while (ready_count_ == 0 && delivered_count_ == 0 && due_count_ == 0);
++  return true;
++}
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // defined(DART_HOST_OS_CTR) || defined(DART_CTR_POLL_HOST_TEST)
+diff --git a/runtime/bin/eventhandler_ctr_poll.h b/runtime/bin/eventhandler_ctr_poll.h
+new file mode 100755
+index 00000000..24cb1ddb
+--- /dev/null
++++ b/runtime/bin/eventhandler_ctr_poll.h
+@@ -0,0 +1,160 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#ifndef RUNTIME_BIN_EVENTHANDLER_CTR_POLL_H_
++#define RUNTIME_BIN_EVENTHANDLER_CTR_POLL_H_
++
++#include <stdint.h>
++
++#if defined(__3DS__)
++// libctru's umbrella header 3ds.h supplies the C linkage of these headers.
++extern "C" {
++#include <3ds/types.h>
++#include <3ds/synchronization.h>
++}
++#else
++#include <condition_variable>
++#include <mutex>
++#endif
++
++struct pollfd;
++
++namespace dart {
++namespace bin {
++
++// The descriptor set, wake-up and timer state behind the CTR event handler.
++// It has no Dart API dependency, so the same code also builds on POSIX hosts
++// for runtime/ctr/test/eventhandler_host_test.cc.
++//
++// libctru's soc service has no epoll, eventfd or pipes, so:
++// - Descriptors are multiplexed with poll(). The pollfd array is rebuilt only
++//   when the set changes.
++// - Other threads queue messages under a lock and signal a condition
++//   variable. soc's poll() can sit out its whole timeout even when a socket
++//   is ready (libctru issue #412), so a loopback wake-up socket cannot cut a
++//   long poll short. With descriptors registered, each poll() is therefore
++//   bounded by kPollSliceMillis and the queue is checked between slices. With
++//   none, the handler waits on the condition variable alone and makes no soc
++//   calls.
++// - Edge-triggered descriptors (all but listening sockets, as with EPOLLET on
++//   Linux) report POLLIN or POLLOUT once. The bit then stays out of the set
++//   until Rearm. poll() cannot mask POLLHUP, POLLERR or POLLNVAL, so once one
++//   is reported the descriptor leaves the set until Update changes it.
++//   Otherwise the handler thread, which runs above the Dart threads, would
++//   spin on a level that nobody consumes.
++// - Each port has at most one timer deadline, as in TimeoutQueue. A due timer
++//   is reported once and removed.
++class CtrPollSet {
++ public:
++  // The longest a message, re-arm or timer waits behind a poll() slice.
++  static constexpr int kPollSliceMillis = 10;
++
++  struct Message {
++    intptr_t id;
++    int64_t dart_port;
++    int64_t data;
++  };
++  struct Ready {
++    intptr_t fd;
++    int revents;
++  };
++  // Monotonic milliseconds, the clock of timer deadlines.
++  typedef int64_t (*Clock)();
++
++  explicit CtrPollSet(Clock clock);
++  ~CtrPollSet();
++
++  // Any thread. Queues a message for the next Wait and wakes it.
++  void Send(intptr_t id, int64_t dart_port, int64_t data);
++  // Any thread. Returns POLLIN and/or POLLOUT of an edge-triggered descriptor
++  // to the set after the socket consumed the reported readiness.
++  void Rearm(intptr_t fd, int events);
++
++  // Handler thread only. Sets the POLLIN/POLLOUT interest of |fd|; zero
++  // removes it. A changed interest starts again with nothing suppressed, as
++  // re-adding a descriptor to epoll reports its current state.
++  void Update(intptr_t fd, int events, bool edge_triggered);
++  // Handler thread only. Sets the deadline of |dart_port|'s timer; a negative
++  // deadline removes it.
++  void SetTimer(int64_t dart_port, int64_t deadline);
++  // Handler thread only. Blocks until a descriptor is ready, a message arrives
++  // or a timer is due, then publishes the results below. Returns false, with
++  // errno set, if poll() fails.
++  bool Wait();
++
++  // Results of the last Wait, valid until the next one.
++  intptr_t ready_count() const { return ready_count_; }
++  const Ready& ready(intptr_t i) const { return ready_[i]; }
++  intptr_t message_count() const { return delivered_count_; }
++  const Message& message(intptr_t i) const { return delivered_[i]; }
++  intptr_t timer_count() const { return due_count_; }
++  int64_t timer(intptr_t i) const { return due_[i]; }
++
++ private:
++  struct Entry {
++    intptr_t fd;
++    int events;
++    int suppressed;
++    bool edge_triggered;
++    bool closed;
++  };
++  struct Timer {
++    int64_t dart_port;
++    int64_t deadline;
++  };
++
++  void Lock();
++  void Unlock();
++  void Signal();
++  void Sleep(int timeout);
++  Entry* Find(intptr_t fd);
++  void Add(intptr_t fd, int events);
++  void Rebuild();
++  int Timeout();
++  void Collect(intptr_t polled);
++  void TakeMessages();
++
++  Clock clock_;
++
++  // Guarded by lock_: entries are shared with Rearm, the queue with Send.
++#if defined(__3DS__)
++  LightLock lock_;
++  CondVar changed_;
++#else
++  std::mutex lock_;
++  std::condition_variable changed_;
++#endif
++  Entry* entries_ = nullptr;
++  intptr_t entry_count_ = 0;
++  intptr_t entry_capacity_ = 0;
++  bool dirty_ = true;
++  Message* queued_ = nullptr;
++  intptr_t queued_count_ = 0;
++  intptr_t queued_capacity_ = 0;
++
++  // Handler thread only.
++  struct pollfd* fds_ = nullptr;
++  intptr_t fd_count_ = 0;
++  intptr_t fd_capacity_ = 0;
++  Timer* timers_ = nullptr;
++  intptr_t timer_count_ = 0;
++  intptr_t timer_capacity_ = 0;
++  Ready* ready_ = nullptr;
++  intptr_t ready_count_ = 0;
++  intptr_t ready_capacity_ = 0;
++  Message* delivered_ = nullptr;
++  intptr_t delivered_count_ = 0;
++  intptr_t delivered_capacity_ = 0;
++  int64_t* due_ = nullptr;
++  intptr_t due_count_ = 0;
++  intptr_t due_capacity_ = 0;
++
++  CtrPollSet(const CtrPollSet&) = delete;
++  CtrPollSet& operator=(const CtrPollSet&) = delete;
++};
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // RUNTIME_BIN_EVENTHANDLER_CTR_POLL_H_
+diff --git a/runtime/bin/io_impl_sources.gni b/runtime/bin/io_impl_sources.gni
+index f4d590c1..673ef74e 100644
+--- a/runtime/bin/io_impl_sources.gni
++++ b/runtime/bin/io_impl_sources.gni
+@@ -12,6 +12,8 @@ io_impl_sources = [
+   "eventhandler.h",
+   "eventhandler_ctr.cc",
+   "eventhandler_ctr.h",
++  "eventhandler_ctr_poll.cc",
++  "eventhandler_ctr_poll.h",
+   "eventhandler_fuchsia.cc",
+   "eventhandler_fuchsia.h",
+   "eventhandler_linux.cc",
+diff --git a/runtime/bin/thread_ctr.cc b/runtime/bin/thread_ctr.cc
+old mode 100644
+new mode 100755
+index a833e60f..c0ba64aa
+--- a/runtime/bin/thread_ctr.cc
++++ b/runtime/bin/thread_ctr.cc
+@@ -7,17 +7,47 @@
+ 
+ #include "bin/thread.h"
+ 
++#include <3ds.h>    // NOLINT
+ #include <errno.h>  // NOLINT
+ 
+ namespace dart {
+ namespace bin {
+ 
+-// dart:io's own threads (event handler, process exit handler) are not yet
+-// ported; Thread::Start reports this error code.
++namespace {
++
++// dart:io's own threads; on CTR that is the event handler. Dart threads run
++// at 0x30 and the console does not time-slice equal priorities, so a busy
++// isolate would starve a thread at 0x30. 0x2F is the launcher keepalive's
++// band, known to stay responsive; the handler blocks in poll() otherwise.
++constexpr s32 kPriority = 0x2F;
++
++struct ThreadStartData {
++  Thread::ThreadStartFunction function;
++  uword parameter;
++};
++
++void ThreadStart(void* data_ptr) {
++  ThreadStartData* data = static_cast<ThreadStartData*>(data_ptr);
++  Thread::ThreadStartFunction function = data->function;
++  uword parameter = data->parameter;
++  delete data;
++  function(parameter);
++}
++
++}  // namespace
++
+ int Thread::TryStart(const char* name,
+                      ThreadStartFunction function,
+                      uword parameter) {
+-  return ENOSYS;
++  ThreadStartData* data = new ThreadStartData{function, parameter};
++  // Detached: libctru frees the stack and thread-local storage on return.
++  ::Thread thread =
++      threadCreate(ThreadStart, data, GetMaxStackSize(), kPriority, 0, true);
++  if (thread == nullptr) {
++    delete data;
++    return EAGAIN;
++  }
++  return 0;
+ }
+ 
+ intptr_t Thread::GetMaxStackSize() {

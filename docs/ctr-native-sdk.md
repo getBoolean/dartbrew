@@ -48,6 +48,16 @@ native SDK.
   extracted SDK and links them with `ctr-ld`. On 2026-11-21 the linux-x64 SDK
   passed that check and its linked sample matched the windows-x64 one byte for
   byte.
+- Patch 0035 ports `dart:io`'s event handler to CTR (`eventhandler_ctr.cc` over
+  the host-testable `eventhandler_ctr_poll.cc`). Sockets are multiplexed with
+  `poll()` and edge triggering is simulated: a socket reports readiness once
+  until the socket code calls `EventHandlerImplementation::Rearm`. Because soc's
+  `poll()` can wait out its whole timeout before reporting a ready socket
+  ([libctru#412](https://github.com/devkitPro/libctru/issues/412)), other
+  threads wake the handler through a condition variable, and with sockets
+  registered it polls in 10 ms slices. `dart:io` threads are libctru threads at
+  priority 0x2F on core 0. The 35-patch tree is
+  `50b6acd417cdda5fb6eefd0aeec8ec20c4c867de`.
 - The compiled Linux SDK built hello, async, GC stress, exceptions and focused
   numerics in both AOT and JIT modes. Networking was disabled, the SDK mount was
   read-only, no source SDK checkout was mounted and PATH contained only bundled

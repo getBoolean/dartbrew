@@ -20,6 +20,10 @@ host-test: check-build
 	$(CXX) $(HOST_FLAGS) -I"$(SDK)/runtime/include" -c source/unsupported.cc -o "$(BUILD)/unsupported.o"
 	$(CXX) $(HOST_FLAGS) test/report_test.cc source/report.cc -o "$(BUILD)/report_test"
 	timeout 20 "$(BUILD)/report_test"
+	# The dart:io event handler's poll set from the SDK checkout (patch 0035).
+	$(CXX) $(HOST_FLAGS) -DDART_CTR_POLL_HOST_TEST -I"$(SDK)/runtime" test/eventhandler_host_test.cc \
+	  "$(SDK)/runtime/bin/eventhandler_ctr_poll.cc" -o "$(BUILD)/eventhandler_host_test"
+	timeout 20 "$(BUILD)/eventhandler_host_test"
 	python3 -m unittest discover -s test -p 'test_*.py' -v
 
 # Link the integration driver with the SDK's successfully linked host VM.
