@@ -66,6 +66,7 @@ As a result most pub packages and most `package:test` suites cannot run on the c
 - R15. Packages with native build hooks (`package:hooks` code assets) build and link for CTR through dartbrew.
 - R16. A platform-channel API in the style of Flutter's channels lets Dart and native handlers exchange named, asynchronous messages in both directions with a standard codec.
 - R17. dartbrew compiles a project's C/C++ sources for CTR with tools bundled in the SDK, both for linking into the app and for producing loadable `.so` files.
+- R24. Developers generate type-safe, synchronous Dart bindings to C headers for CTR with FFIgen: libctru headers and the project's own headers, through dartbrew with SDK-bundled tools. Generated bindings are the primary documented way to call console code; platform channels (R16) remain the compatibility layer.
 
 **Library conformance and limits**
 - R18. The remaining core libraries (`dart:convert`, `dart:typed_data`, `dart:math`, `dart:collection`, `dart:async`, zones and timers, `dart:developer`) behave as specified, or their CTR differences are documented.
@@ -83,6 +84,7 @@ As a result most pub packages and most `package:test` suites cannot run on the c
 - **"Full compatibility" means upstream suites passing on device plus an exceptions list.** (session-settled: user-approved — chosen over a feature checklist: a checklist cannot show semantics match.) Governs R19, R21.
 - **`DynamicLibrary.open` gets a real runtime loader, with link-time library resolution as the fallback plan if the loader proves infeasible.** (session-settled: user-directed — chosen over link-time-only resolution and over a loader with a runtime fallback layer.) Governs R14.
 - **Native interop includes platform channels as well as FFI.** (session-settled: user-directed — the user extended "full compatibility" to calling native code through platform channels or native interop.) Governs R13, R16.
+- **Direct native interop through FFIgen is the primary path; platform channels stay as the compatibility layer.** Follows Flutter 3.50's stable direct native interop. (session-settled: user-directed — chosen over keeping FFIgen for the follow-up only and over dropping channels.) Governs R16, R24.
 - **Some APIs stay unsupported by design.** Processes and file watching have no 3DS homebrew equivalent. (session-settled: user-approved — chosen over emulating them with fake implementations.) Governs R21.
 
 ### Success Criteria
@@ -105,7 +107,7 @@ As a result most pub packages and most `package:test` suites cannot run on the c
 
 #### Deferred to Follow-Up Work
 
-- **A Dart FFI package covering all homebrew libraries and their native functions:** libctru, citro2d, citro3d and the other devkitPro portlibs, generated from their headers and published for apps.
+- **A Dart FFI package covering all homebrew libraries and their native functions:** libctru, citro2d, citro3d and the other devkitPro portlibs, generated with FFIgen (U23) from their headers and published for apps.
 - Runtime loader extras beyond R14's core: thread-local storage in loaded libraries, unloading, and C++ exception handling across the boundary.
 - Signing and macOS notarization of SDK builds.
 - Restoring CI builds once GitHub Actions billing is fixed.
@@ -138,6 +140,7 @@ As a result most pub packages and most `package:test` suites cannot run on the c
 - KTD13. **Platform channels are a dartbrew-shipped pure-Dart package plus a C header.** The codec follows the wire format of Flutter's `StandardMessageCodec`, so later Flutter plugins can share message formats. Dart-to-native calls use FFI. Native-to-Dart messages and replies use `Dart_PostCObject` through `dart_api_dl` (U15).
 - KTD14. **Each area is its own SDK patch, numbered from 0034, recorded in `toolchain/versions.json`.** Every patch changes the SDK hash, so each preview rebuilds host tools on all four hosts with the local producers used for preview.4.
 - KTD15. **Thread placement and priorities are decided by U4's spike, before isolates or the event handler depend on them.** The console scheduler does not time-slice threads of equal priority, so a busy isolate could starve the others and the event handler.
+- KTD17. **FFIgen runs with libclang bundled in the SDK and a dartbrew-supplied CTR configuration.** The libclang shared library comes from the same pinned LLVM release as the bundled clang (U13). dartbrew supplies the target triple, flags and SDK header paths from the same native compiler configuration the build uses, so generated bindings match compiled code. (Inherits the direct-interop Key Decision; governs R24.)
 - KTD16. **Conformance runs upstream test files batched into few apps.** One app per test is too slow to upload. Batched apps report per test, with a CTR status file of expected failures. Azahar runs the AOT corpus for throughput, and the console runs the full corpus in AOT and JIT before each phase release.
 
 ### High-Level Technical Design
@@ -185,7 +188,7 @@ flowchart TB
   P0 --> S2{"U5 loader go/no-go"}
   S2 -->|go| L1["U16 builds the runtime loader"]
   S2 -->|no-go| L2["U16 builds link-time resolution"]
-  P3 --> P4["Phase 4: native interop (U13-U18)"]
+  P3 --> P4["Phase 4: native interop (U13-U18, U23)"]
   L1 --> P4
   L2 --> P4
   P4 --> P5["Phase 5: conformance and limits (U20-U21)"]
@@ -213,7 +216,7 @@ sequenceDiagram
 | 1 | U6-U9, U22 | preview.5 | Files, romfs assets, stdio, `Platform`, `exit`, feature qualification harness |
 | 2 | U10, U19 | preview.6 | Isolates, upstream conformance runner |
 | 3 | U11-U12 | preview.7 | Sockets, DNS, HTTP, WebSocket, TLS |
-| 4 | U13-U18 | preview.8 | C toolchain, FFI linking, callbacks, loader, hooks, channels |
+| 4 | U13-U18, U23 | preview.8 | C toolchain, FFI linking, callbacks, loader, hooks, channels, FFIgen bindings |
 | 5 | U20-U21 | preview.9 | Final conformance report, remaining libraries, limits, final docs |
 
 ### Risks & Dependencies
@@ -264,6 +267,7 @@ sequenceDiagram
 | U20 | Remaining libraries audit | `test/programs/libraries.dart` | U19 |
 | U21 | Resource limits and failure shapes | `runtime/ctr/source/embedder.cc`, `docs/ctr-supported-features.md` | U10, U12, U16 |
 | U22 | Feature qualification harness | `release/check_release.py`, `docs/qualification/` | U3 |
+| U23 | FFIgen bindings for CTR | `packages/dartbrew/lib/src/commands/ffigen.dart`, `release/native_clang.py` | U13, U14 |
 
 ### U1. Port runtime/bin build to CTR
 
@@ -863,6 +867,35 @@ sequenceDiagram
 - A feature marked not applicable to Azahar (JIT, loader) does not require an Azahar result.
 
 **Verification:** Guard tests pass, and preview.5 is the first release checked with features.
+
+### U23. FFIgen bindings for CTR
+
+**Goal:** Developers generate Dart bindings to libctru and project C headers with FFIgen for CTR, and call them synchronously from Dart (R24).
+
+**Requirements:** R24
+
+**Dependencies:** U13, U14
+
+**Files:**
+- `release/native_clang.py` and `release/clang-source.json`: the clang component also carries the libclang shared library from the same pinned LLVM release.
+- `packages/dartbrew/lib/src/commands/ffigen.dart` (new): `dartbrew ffigen` runs the project's FFIgen with the bundled libclang and the CTR compiler options (KTD17).
+- `packages/dartbrew/lib/src/cli.dart`: registers the command.
+- `packages/dartbrew/lib/src/targets/ctr/templates.dart`: the native template uses generated bindings.
+- `packages/dartbrew/test/ffigen_test.dart` (new), `test/programs/ffigen_libctru/` (new fixture project)
+- `release/README.md`, `docs/ctr-supported-features.md`: generated bindings documented as the primary interop path.
+
+**Approach:**
+- FFIgen is the project's own dev dependency. dartbrew passes the libclang path and compiler options, and never edits the project's FFIgen config file.
+- The CTR options come from the SDK's native compiler configuration (U13), so headers parse with the same type definitions the compiled code uses.
+- Bindings resolve through `@Native` and the exported symbol table (U14), so they work in AOT and JIT and in Azahar.
+
+**Test scenarios:**
+- Generating bindings for libctru's `hid.h` produces Dart functions for `hidScanInput` and `hidKeysDown`, with the integer types of libctru's typedefs (for example `u32` as `Uint32`).
+- On the console, the fixture calls `hidScanInput()` and `hidKeysDown()` synchronously through the generated bindings and prints the key state.
+- A project header with a struct and an enum generates bindings whose struct size matches what the bundled compiler reports.
+- A header with a syntax error fails `dartbrew ffigen`, showing libclang's message with file and line.
+
+**Verification:** The fixture passes on the console in AOT and JIT and in Azahar; generated struct layouts match compiled layouts.
 
 ---
 
