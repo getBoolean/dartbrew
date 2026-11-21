@@ -67,7 +67,30 @@ def checked(root, name, expected):
     return path
 
 
-def assemble(cli, precompiler, binutils, runtime, output, version):
+def compiler_inputs(clang, headers, host, target):
+    """Optional C/C++ compiler component: clang for this host plus target headers."""
+    if (clang is None) != (headers is None):
+        raise ValueError('the clang and target-header components are used together')
+    if clang is None:
+        return None, None, []
+    clang, headers = Path(clang), Path(headers)
+    compiler = read(clang / 'provenance.json')
+    header_record = read(headers / 'headers.json')
+    if compiler['host'] != host:
+        raise ValueError('clang component host mismatch')
+    frozen = target['producer']['original_sha256']
+    for name, sha in header_record['library_sha256'].items():
+        if frozen.get(name) != sha:
+            raise ValueError(f'target headers were not taken with the frozen runtime library {name}')
+    inputs = []
+    for name, sha in compiler['files'].items():
+        inputs.append((checked(clang, name, sha), name, name == compiler['tool']['path']))
+    for name, sha in header_record['files'].items():
+        inputs.append((checked(headers, name, sha), name, False))
+    return compiler, header_record, inputs
+
+
+def assemble(cli, precompiler, binutils, runtime, output, version, clang=None, headers=None):
     cli, precompiler, binutils, runtime, output = map(Path, (cli, precompiler, binutils, runtime, output))
     if output.exists():
         raise ValueError('SDK output already exists; choose a fresh directory')
@@ -76,6 +99,7 @@ def assemble(cli, precompiler, binutils, runtime, output, version):
     target = read(runtime / 'runtime.json')
     if host['host'] != arm['host'] or host['source']['head'] != target['sdk_head']:
         raise ValueError('component host or SDK identity mismatch')
+    compiler, header_record, compiler_files = compiler_inputs(clang, headers, host['host'], target)
     if target['program_size'] != 32 or target['program_identity_offset'] != 16:
         raise ValueError('unsupported target Program ABI')
     if host['generated']['git_short_hash'] != target['sdk_head'][:10]:
@@ -103,6 +127,9 @@ def assemble(cli, precompiler, binutils, runtime, output, version):
     tools['dart'] = 'host-dart/bin/dart' + suffix
     for name, sha in target['files'].items():
         inputs.append((checked(runtime, name, sha), name, False))
+    if compiler is not None:
+        tools['clang'] = compiler['tool']['path']
+        inputs += compiler_files
     if not cli.is_file():
         raise ValueError('compiled CLI is missing')
     source_asset = output.parent / f'source-ctr-binutils-{version}-{host["host"]}.zip'
@@ -126,12 +153,19 @@ def assemble(cli, precompiler, binutils, runtime, output, version):
         f'SHA256: {digest(source_asset)}\n'
         'Retain that source asset with redistributed copies of the GNU binaries.\n', encoding='utf-8')
     shutil.copytree(ROOT / 'release/target-sources', notices / 'target-sources')
+    if compiler is not None:
+        shutil.copytree(Path(clang) / 'licenses', notices / 'clang')
+        shutil.copyfile(Path(clang) / 'NOTICE.txt', notices / 'clang-NOTICE.txt')
+        shutil.copyfile(Path(headers) / 'NOTICE.txt', notices / 'target-headers-NOTICE.txt')
     provenance = output / 'provenance'
     provenance.mkdir()
     for source, name in [(precompiler / 'native-precompiler.json', 'host.json'),
                          (binutils / 'provenance.json', 'binutils.json'),
                          (runtime / 'runtime.json', 'runtime.json')]:
         shutil.copyfile(source, provenance / name)
+    if compiler is not None:
+        shutil.copyfile(Path(clang) / 'provenance.json', provenance / 'clang.json')
+        shutil.copyfile(Path(headers) / 'headers.json', provenance / 'target-headers.json')
     (output / 'README.txt').write_text(README_TEXT, encoding='utf-8')
     executable_paths = [name for _, name, executable in inputs if executable]
     files = {path.relative_to(output).as_posix(): digest(path)
@@ -141,6 +175,10 @@ def assemble(cli, precompiler, binutils, runtime, output, version):
                     snapshot_hash=host['generated']['snapshot_hash'], files=files,
                     corresponding_source=dict(asset=source_asset.name, sha256=digest(source_asset)),
                     executable_paths=executable_paths)
+    if compiler is not None:
+        from native_clang import target_config
+        manifest['native_compiler'] = target_config(read(ROOT / 'toolchain/target-ctr.json'),
+                                                    compiler, header_record)
     (output / 'sdk.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     return manifest
 
@@ -159,6 +197,9 @@ if __name__ == '__main__':
     for name in ['cli', 'precompiler', 'binutils', 'runtime', 'output']:
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--version', required=True)
+    parser.add_argument('--clang', type=Path, help='optional clang component (needs --headers)')
+    parser.add_argument('--headers', type=Path, help='optional CTR target-header component')
     args = parser.parse_args()
-    assemble(args.cli, args.precompiler, args.binutils, args.runtime, args.output, args.version)
+    assemble(args.cli, args.precompiler, args.binutils, args.runtime, args.output, args.version,
+             clang=args.clang, headers=args.headers)
     archive_sdk(args.output, args.output.with_suffix('.zip'))

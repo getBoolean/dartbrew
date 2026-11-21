@@ -48,7 +48,7 @@ def verify_codegen(assembly, expected, host, compiler_version):
                 reference_producer_host='linux')
 
 
-def build(precompiler, binutils, runtime, output):
+def build(precompiler, binutils, runtime, output, clang=None, headers=None):
     precompiler, binutils, runtime, output = map(Path, (precompiler, binutils, runtime, output))
     if output.exists():
         raise ValueError('producer output already exists')
@@ -69,6 +69,9 @@ def build(precompiler, binutils, runtime, output):
     arm = read(binutils / 'provenance.json')
     for name, record in arm['tools'].items():
         checked(binutils, 'bin/' + name, record['sha256']).chmod(0o755)
+    if clang is not None:
+        tool = read(Path(clang) / 'provenance.json')['tool']
+        checked(Path(clang), tool['path'], tool['sha256']).chmod(0o755)
     dart = precompiler / 'host-dart/bin' / ('dart' + suffix)
     version = read(ROOT / 'release/preview.json')['version']
     output.mkdir(parents=True)
@@ -90,7 +93,7 @@ def build(precompiler, binutils, runtime, output):
     ]:
         subprocess.run([str(dart), *arguments], cwd=package, check=True)
     sdk = output / f'dartbrew-{version}-{host["host"]}'
-    manifest = assemble(cli, precompiler, binutils, runtime, sdk, version)
+    manifest = assemble(cli, precompiler, binutils, runtime, sdk, version, clang=clang, headers=headers)
     dependencies = audit_sdk(sdk, host['host'], manifest['tools'])
     archive = output / (sdk.name + '.zip')
     archive_sdk(sdk, archive)
@@ -108,6 +111,10 @@ def build(precompiler, binutils, runtime, output):
     env = dict(os.environ, PATH='')
     for arguments in [['--help'], ['--version'], ['doctor']]:
         subprocess.run([str(installed / cli.name), *arguments], env=env, check=True)
+    compiler_check = None
+    if 'native_compiler' in manifest:
+        from native_clang import check_sdk_compiler
+        compiler_check = check_sdk_compiler(installed, output / 'compiler-check')
     verification_env = dict(env, DARTBREW_NATIVE_SDK=str(installed))
     verification_work = output / 'verification-work'
     verification_work.mkdir()
@@ -139,6 +146,7 @@ def build(precompiler, binutils, runtime, output):
                    dependency_audit=dependencies,
                    execution_candidates=dict(archive=candidates.name, sha256=digest(candidates)),
                    restored_transport_files=restored,
+                   native_compiler_check=compiler_check,
                    scope='Real host-native build/package checks; target execution remains separate')
     (output / 'verification.json').write_text(json.dumps(receipt, indent=2) + '\n')
     return receipt
@@ -148,6 +156,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('precompiler', 'binutils', 'runtime', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--clang', type=Path, help='optional clang component (needs --headers)')
+    parser.add_argument('--headers', type=Path, help='optional CTR target-header component')
     args = parser.parse_args()
-    receipt = build(args.precompiler.resolve(), args.binutils.resolve(), args.runtime.resolve(), args.output.resolve())
+    receipt = build(args.precompiler.resolve(), args.binutils.resolve(), args.runtime.resolve(), args.output.resolve(),
+                    clang=args.clang and args.clang.resolve(), headers=args.headers and args.headers.resolve())
     print(json.dumps({key: value for key, value in receipt.items() if key != 'dependency_audit'}))

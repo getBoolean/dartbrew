@@ -32,6 +32,22 @@ native SDK.
   callbacks into the app, libc and libgcc imports and hard-float arguments all
   worked; a TLS relocation was rejected by name. `DynamicLibrary.open` will
   therefore use a real runtime loader rather than the link-time fallback.
+- The SDK can now carry a C/C++ compiler for CTR: `bin/ctr-clang` (unmodified
+  LLVM clang 23.1.5, Apache-2.0 WITH LLVM-exception), its resource headers, and
+  CTR target headers (newlib, libstdc++ and libctru headers from the same
+  devkitPro install as the frozen libraries; no devkitPro host tools).
+  `release/native_clang.py --target <host>` produces clang per host from the pins
+  in `release/clang-source.json`: official LLVM archives for windows-x64 and
+  macos-arm64, and a clang-only, ARM-only build from the pinned source for
+  linux-x64 (the official Linux archive needs `libstdc++` and `libz`, which the
+  SDK dependency policy rejects) and macos-x64 (LLVM publishes no Intel macOS
+  archive). `--headers` produces the header component. `sdk.json`
+  `native_compiler` records the triple, flags and include order; integer-type
+  macros come from GCC so headers, C++ mangling and the prebuilt libraries agree.
+  `build_native_sdk.py --clang --headers` compiles a C and a C++ sample from the
+  extracted SDK and links them with `ctr-ld`. On 2026-11-21 the linux-x64 SDK
+  passed that check and its linked sample matched the windows-x64 one byte for
+  byte.
 - The compiled Linux SDK built hello, async, GC stress, exceptions and focused
   numerics in both AOT and JIT modes. Networking was disabled, the SDK mount was
   read-only, no source SDK checkout was mounted and PATH contained only bundled
