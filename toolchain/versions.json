@@ -137,6 +137,10 @@
     {
       "path": "patches/dart/0033-ctr-uri-base.patch",
       "sha256": "dc57e6aba9f229e4a8cd0732ab6d82cdb7b719f0cbc6f97d51c1cc8fb74522eb"
+    },
+    {
+      "path": "patches/dart/0034-ctr-io-port.patch",
+      "sha256": "cc6a4d0f22397566ae6d3391db614d6e2124ff01d1b892d4d119930d3ffd3713"
     }
   ],
   "dependencies": {

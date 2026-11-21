@@ -16,6 +16,14 @@ native SDK.
   (`Uri.base` for CTR), giving the 33-patch tree at
   `b1056c03eab479934538c293da82d356de11bab2`. The evidence below was gathered
   on the 32-patch tree.
+- After preview.4, patch 0034 (`ctr-io-port`) ports the SDK's I/O layer
+  (`runtime/bin`) to CTR as a new host OS. Both target graphs build a
+  `runtime/bin/ctr:dart_io` archive, which the runtime freeze exports as
+  `lib/<mode>/io.a` (`io_archive` in `runtime.json`). Every OS area is still a
+  stub that fails with `OSError` (`ENOSYS`, "<Area> is not supported on CTR
+  (dart:io)"); secure sockets use the upstream unsupported variant. The 34-patch
+  tree is `89f8823f45bbf805abc062c24f8a3b33e896ddeb`. The launcher does not link
+  the archive yet.
 - The compiled Linux SDK built hello, async, GC stress, exceptions and focused
   numerics in both AOT and JIT modes. Networking was disabled, the SDK mount was
   read-only, no source SDK checkout was mounted and PATH contained only bundled

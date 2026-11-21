@@ -104,9 +104,12 @@ static_assert(offsetof(ctr::BuildIdentity, build_id) == 12);
         run([*flags, '-c', assertion, '-o', work / f'program-layout-{mode}.o'], cwd=build)
         archive_name = 'libdart_aotruntime.a' if mode == 'aot' else 'libdart_jit.a'
         archive = copy(build / 'obj/runtime' / archive_name, f'lib/{mode}/runtime.a', True)
+        # The SDK's dart:io implementation (runtime/bin) built for CTR.
+        io_archive = copy(build / 'obj/runtime/bin/ctr/libdart_io.a', f'lib/{mode}/io.a', True)
         run([sys.executable, ROOT / 'toolchain/test/test_ctr_native_offsets.py', '--source', source,
              '--build', build, '--mode', mode, '--output', work / f'native-offsets-{mode}'])
-        modes[mode] = dict(compatibility=identity['cache_key'], objects=objects, archive=archive)
+        modes[mode] = dict(compatibility=identity['cache_key'], objects=objects, archive=archive,
+                           io_archive=io_archive)
     platform = output / 'lib/platform.dill'
     dart = source / 'tools/sdks/dart-sdk/bin/dart'
     run([dart, source / 'pkg/front_end/tool/compile_platform.dart', '--target=vm',
