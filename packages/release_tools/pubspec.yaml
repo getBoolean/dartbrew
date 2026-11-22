@@ -11,6 +11,7 @@ dev_dependencies:
   lints: 6.1.0
   test: 1.33.0
 executables:
+  build_precompiler:
   check_release:
   check_upstream:
   update_upstream:
