@@ -1,0 +1,56 @@
+[
+  {
+    "sha": "5740da9beb433ff9f5b724fafc1127f3a5ddc944",
+    "commit": {
+      "message": "devkitPPC: update gcc to 16.2.0",
+      "committer": {
+        "date": "2026-10-10T22:47:45Z"
+      }
+    }
+  },
+  {
+    "sha": "8aebbff25bbd1b959fe4851d2d9d05ef32b16185",
+    "commit": {
+      "message": "devkitPPC: update binutils to 2.47",
+      "committer": {
+        "date": "2026-10-10T22:38:10Z"
+      }
+    }
+  },
+  {
+    "sha": "9b57a022648cbd971c2df3652671cc9deaa2482a",
+    "commit": {
+      "message": "devkitA64: release 30",
+      "committer": {
+        "date": "2026-06-10T16:01:20Z"
+      }
+    }
+  },
+  {
+    "sha": "5be6f7a1214ec8d68054b2d0b6023aeb4ea56667",
+    "commit": {
+      "message": "devkitARM: release 68",
+      "committer": {
+        "date": "2026-06-10T16:01:20Z"
+      }
+    }
+  },
+  {
+    "sha": "7a8c81eeccb4890c7abfe4677a21100909beff64",
+    "commit": {
+      "message": "devkitPPC: binutils 2.46, gcc 16.1.0",
+      "committer": {
+        "date": "2026-06-10T16:01:13Z"
+      }
+    }
+  },
+  {
+    "sha": "174e0edc3f320f53025cd9c662493e22dffbd84e",
+    "commit": {
+      "message": "devkitARM: fix c89 building",
+      "committer": {
+        "date": "2026-04-11T16:35:30Z"
+      }
+    }
+  }
+]

@@ -443,7 +443,11 @@ void main() {
         archive,
       );
       expect(result.stderr, isEmpty);
-      expect(result.stdout, 'qualified: dartbrew-$current-linux-x64.zip\n');
+      // Then the upstream report, or a line saying it is unavailable.
+      expect(
+        result.stdout,
+        startsWith('qualified: dartbrew-$current-linux-x64.zip\nupstream: '),
+      );
       expect(result.exitCode, 0);
     });
 

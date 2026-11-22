@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import 'host.dart';
+import 'upstream.dart';
 
 /// Where a release is qualified; every feature needs a result for each.
 enum QualificationEnvironment {
@@ -66,20 +67,43 @@ Future<List<String>> checkRelease({
   return [for (final archive in digests) archive.name];
 }
 
-/// The version being released, from `release/preview.json`.
-Future<String> previewVersion() async {
+/// The root of the repository this package is in.
+Future<String> repositoryRoot() async {
   final library = await Isolate.resolvePackageUri(
     Uri.parse('package:release_tools/'),
   );
-  final repository = p.join(library!.toFilePath(), '..', '..', '..');
+  return p.normalize(p.join(library!.toFilePath(), '..', '..', '..'));
+}
+
+/// The pin table, `toolchain/versions.json`.
+Future<File> pinTable() async =>
+    File(p.join(await repositoryRoot(), 'toolchain', 'versions.json'));
+
+/// The version being released, from `release/preview.json`.
+Future<String> previewVersion() async {
   final preview =
       jsonDecode(
             await File(
-              p.normalize(p.join(repository, 'release', 'preview.json')),
+              p.join(await repositoryRoot(), 'release', 'preview.json'),
             ).readAsString(),
           )
           as Map<String, Object?>;
   return preview['version']! as String;
+}
+
+/// The upstream report for the pins in [versions], for printing after a
+/// release check; never fails the release, so an unreadable upstream
+/// becomes a line saying so.
+Future<List<String>> upstreamReportLines(File versions, FetchJson fetch) async {
+  try {
+    final report = await checkUpstream(
+      Pins.parse(await versions.readAsString()),
+      fetch,
+    );
+    return report.lines;
+  } on UpstreamUnavailable catch (error) {
+    return ['upstream: check unavailable ($error)'];
+  }
 }
 
 /// Every reason the qualification [results] do not cover [archives] at

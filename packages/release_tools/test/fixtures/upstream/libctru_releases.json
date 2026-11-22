@@ -1,0 +1,23 @@
+[
+  {
+    "tag_name": "v2.7.1",
+    "name": "libctru v2.7.1",
+    "draft": false,
+    "prerelease": false,
+    "published_at": "2026-11-01T12:44:08Z"
+  },
+  {
+    "tag_name": "v2.7.0",
+    "name": "v2.7.0",
+    "draft": false,
+    "prerelease": false,
+    "published_at": "2026-02-19T17:23:16Z"
+  },
+  {
+    "tag_name": "v2.6.2",
+    "name": "v2.6.2",
+    "draft": false,
+    "prerelease": false,
+    "published_at": "2025-06-26T09:01:41Z"
+  }
+]

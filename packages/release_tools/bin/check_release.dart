@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:args/args.dart';
 import 'package:release_tools/src/release_check.dart';
+import 'package:release_tools/src/upstream.dart';
 
 const _usage =
     'Refuses to publish SDK archives that were not qualified for this '
@@ -39,5 +40,16 @@ Future<void> main(List<String> arguments) async {
   } on ReleaseRefused catch (refusal) {
     stderr.writeln(refusal);
     exitCode = 1;
+    return;
+  }
+  final client = upstreamHttpClient();
+  try {
+    stdout.writeAll(
+      await upstreamReportLines(await pinTable(), httpFetchJson(client)),
+      '\n',
+    );
+    stdout.writeln();
+  } finally {
+    client.close();
   }
 }
