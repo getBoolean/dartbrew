@@ -1,10 +1,8 @@
 #include <3ds.h>
-#include <algorithm>
 #include <arpa/inet.h>
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
-#include <optional>
 #include <string>
 #include <unistd.h>
 #include "bin/dart_io_api.h"
@@ -12,6 +10,8 @@
 #include "input.h"
 #include "keyboard.h"
 #include "link.h"
+#include "priorities.h"
+#include "stdin_source.h"
 #include "storage.h"
 #include "vm/os.h"
 #include "vm/os_thread.h"
@@ -29,9 +29,7 @@ constexpr char kTempDart[] = "/dartbrew/tmp";
 struct Run {
   ctr::Runner runner;
   ctr::Report report;
-  ctr::Outcome outcome = ctr::Outcome::fail;
-  // Set when the program ended through exit() or a nonzero exitCode.
-  std::optional<int64_t> exit_code;
+  ctr::Completion completion;
   std::string script;
   std::atomic<bool> done{false};
   dart::ThreadJoinId join = dart::OSThread::kInvalidThreadJoinId;
@@ -40,58 +38,30 @@ void Execute(dart::uword parameter) {
   auto* run = reinterpret_cast<Run*>(parameter);
   run->join = dart::OSThread::GetCurrentThreadJoinId(dart::OSThread::Current());
   ctr::Embedder application(ctr_program, run->runner, run->report, run->script.c_str());
-  run->outcome = run->runner.Run(application);
-  if (run->runner.exited()) {
-    run->exit_code = run->runner.exit_code();
-  } else if (run->outcome == ctr::Outcome::pass) {
-    // As on other platforms, a program that sets exitCode ends with it.
-    if (const int code = dart::bin::GetExitCode()) {
-      run->exit_code = code;
-      run->outcome = ctr::Outcome::fail;
-    }
-  }
+  run->completion = run->runner.Run(application, dart::bin::GetExitCode);
   run->done.store(true, std::memory_order_release);
 }
-// dart:io's standard streams (SetCtrStdio) and exit() (SetExitHook) reach the
-// run through these. stdin comes from the host link when one is connected,
-// and from the software keyboard otherwise (R3).
-struct Streams {
+// dart:io's standard streams (SetCtrStdio) and exit() (SetExitHook) are plain
+// function pointers; they reach the run through these.
+struct Hooks {
   ctr::Report* report = nullptr;
-  ctr::Link* link = nullptr;
-  ctr::Keyboard* keyboard = nullptr;
+  ctr::StdinSource* input = nullptr;
   ctr::Runner* runner = nullptr;
-  ctr::Mutex reading;  // One stdin reader at a time; guards the buffer.
-  // Bytes received from the host and not read yet: readLineSync reads one
-  // byte at a time, and each link read may wait for a poll slice.
-  uint8_t buffered[4096];
-  size_t start = 0, end = 0;
-} streams;
+} hooks;
 bool WriteStdio(intptr_t fd, const uint8_t* buffer, intptr_t length) {
-  streams.report->Stdio(static_cast<int>(fd), reinterpret_cast<const char*>(buffer),
-                        static_cast<size_t>(length));
+  hooks.report->Stdio(static_cast<int>(fd), reinterpret_cast<const char*>(buffer),
+                      static_cast<size_t>(length));
   return true;
 }
 intptr_t ReadStdin(uint8_t* buffer, intptr_t length) {
   // Show a prompt written without a newline before waiting for input.
-  streams.report->Flush();
-  ctr::Lock lock(streams.reading);
-  if (!streams.link) return streams.keyboard->Read(buffer, length);
-  if (streams.start == streams.end) {
-    const intptr_t received = streams.link->Read(streams.buffered, sizeof(streams.buffered));
-    if (received <= 0) return received;
-    streams.start = 0;
-    streams.end = static_cast<size_t>(received);
-  }
-  const size_t count = std::min(streams.end - streams.start, static_cast<size_t>(length));
-  memcpy(buffer, streams.buffered + streams.start, count);
-  streams.start += count;
-  return static_cast<intptr_t>(count);
+  hooks.report->Flush();
+  return hooks.input->Read(buffer, length);
 }
-void Exited(int64_t code) { streams.runner->Exit(code); }
-// Dart threads and this main thread both run at priority 0x30 on core 0, and
-// the scheduler does not time-slice equal priorities, so a CPU-bound program
-// would starve a main-loop keepalive. A higher-priority thread preempts it.
-constexpr s32 kKeepalivePriority = 0x2F;
+void Exited(int64_t code) { hooks.runner->Exit(code); }
+// Dart threads and this main thread run on core 0 at kApplicationPriority, so
+// a CPU-bound program would starve a main-loop keepalive; a thread at
+// kServicePriority preempts it.
 void SendKeepalives(void* parameter) {
   auto* run = static_cast<Run*>(parameter);
   while (!run->done.load(std::memory_order_acquire)) {
@@ -146,12 +116,13 @@ int main(int argc, char** argv) {
   FILE* journal = fopen("sdmc:/ctr-runtime.log", "a");
   bool began = identified && run.report.Begin(identity, journal, ctr_program.build, link_error);
   bool initialized = false, io = false, cleanup = true;
+  ctr::Outcome outcome = ctr::Outcome::fail;
   ctr::Input input;
   ctr::Keyboard keyboard(ctr::Keyboard::SystemPrompt);
-  streams.report = &run.report;
-  streams.link = link.connected() ? &link : nullptr;
-  streams.keyboard = &keyboard;
-  streams.runner = &run.runner;
+  // stdin comes from the host link when one is connected, and from the
+  // software keyboard otherwise (R3).
+  ctr::StdinSource standard_input(link.connected() ? static_cast<ctr::Source&>(link) : keyboard);
+  hooks = {&run.report, &standard_input, &run.runner};
   if (began) {
     if (!in_folder) run.report.Output("CTR working directory could not be set");
     if (!ctr::ClearDirectory(kTemp))
@@ -198,19 +169,18 @@ int main(int argc, char** argv) {
       } else {
         bool input_lost = false;
         Thread keepalives = threadCreate(SendKeepalives, &run, 4 * 1024,
-                                         kKeepalivePriority, 0, false);
+                                         ctr::kServicePriority, 0, false);
         // Stopping also ends stdin, so a program blocked reading it returns.
-        auto end_input = [&] { keyboard.Stop(); link.StopReading(); };
         while (!run.done.load(std::memory_order_acquire)) {
-          if (!aptMainLoop()) { run.runner.RequestStop(); end_input(); }
+          if (!aptMainLoop()) { run.runner.RequestStop(); standard_input.Stop(); }
           else if (!input_lost) {
             u32 keys = 0;
             if (!input.Poll(&keys)) {
               input_lost = true;
               cleanup = false;
               run.runner.Fail();
-              end_input();
-            } else if (keys & KEY_START) { run.runner.RequestStop(); end_input(); }
+              standard_input.Stop();
+            } else if (keys & KEY_START) { run.runner.RequestStop(); standard_input.Stop(); }
           }
           // A stdin read without a host link opens the keyboard here.
           keyboard.Serve();
@@ -227,8 +197,7 @@ int main(int argc, char** argv) {
       // The isolate is gone: release dart:io threads still waiting for stdin,
       // then stop the event handler before the VM, so no late timer or socket
       // event posts into a VM being torn down.
-      keyboard.Stop();
-      link.StopReading();
+      standard_input.Stop();
       dart::bin::CleanupDartIo();
       io = false;
       error = Dart_Cleanup();
@@ -236,13 +205,13 @@ int main(int argc, char** argv) {
     }
     if (io) dart::bin::CleanupDartIo();
     input.Stop();
-    run.outcome = run.report.End(run.outcome, cleanup, run.exit_code);
+    outcome = run.report.End(run.completion, cleanup);
   }
   run.report.Attach(nullptr);
   link.Close();
   sockets.Stop();
-  if (journal && fclose(journal)) run.outcome = ctr::Outcome::fail;
+  if (journal && fclose(journal)) outcome = ctr::Outcome::fail;
   fsExit();
   gfxExit();
-  return began && run.outcome == ctr::Outcome::pass ? 0 : 1;
+  return began && outcome == ctr::Outcome::pass ? 0 : 1;
 }

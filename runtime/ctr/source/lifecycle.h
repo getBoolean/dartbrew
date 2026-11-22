@@ -1,8 +1,16 @@
 #ifndef CTR_LIFECYCLE_H_
 #define CTR_LIFECYCLE_H_
 #include "sync.h"
+#include <cstdint>
+#include <optional>
 namespace ctr {
 enum class Outcome { pass, fail, incomplete };
+// How a run ended. exit_code is set when the program ended through exit(),
+// or returned normally with a nonzero exitCode; the terminal record carries it.
+struct Completion {
+  Outcome outcome = Outcome::fail;
+  std::optional<int64_t> exit_code;
+};
 struct Application {
   virtual ~Application() = default;
   virtual bool Bootstrap() = 0;
@@ -20,10 +28,11 @@ class Runner {
   // unwinds: the run ends after the current message, without running the
   // pending ones. Code 0 passes; any other code fails carrying it.
   void Exit(int64_t code);
-  // Read after Run returns.
   bool exited() const { return exited_; }
-  int64_t exit_code() const { return exit_code_; }
-  Outcome Run(Application& application);
+  // Runs the application to its end. exit(n) ends it with n: 0 passes, any
+  // other code fails. A program that otherwise passes fails when
+  // read_exit_code, which returns dart:io's exitCode, is nonzero.
+  Completion Run(Application& application, int (*read_exit_code)());
   void Shutdown(Application& application);
  private:
   Mutex lock_;

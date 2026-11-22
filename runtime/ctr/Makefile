@@ -7,7 +7,9 @@ CXX ?= g++
 OBJDUMP ?= /opt/devkitpro/devkitARM/bin/arm-none-eabi-objdump
 TEST_TIMEOUT = timeout 20
 HOST_FLAGS = -std=c++20 -Wall -Wextra -Werror -pthread -Isource
-SOURCES = source/embedder.cc source/lifecycle.cc source/timer_worker.cc source/report.cc source/link.cc source/unsupported.cc source/keyboard.cc source/storage.cc
+# Journal vectors shared with the host's verdict tests.
+VERDICT_VECTORS = ../../packages/dartbrew/test/data/verdict_vectors.json
+SOURCES = source/embedder.cc source/lifecycle.cc source/timer_worker.cc source/report.cc source/link.cc source/unsupported.cc source/keyboard.cc source/stdin_source.cc source/storage.cc
 # Host stand-ins for libctru that the SDK host tests compile SDK sources against.
 SDK_FIXTURES = ../../toolchain/test
 SDK_VM_FLAGS = -std=c++20 -D__3DS__ -DDEBUG
@@ -30,11 +32,13 @@ host-test: build-dir
 	$(CXX) $(HOST_FLAGS) test/lifecycle_test.cc source/lifecycle.cc -o "$(BUILD)/lifecycle_test"
 	$(TEST_TIMEOUT) "$(BUILD)/lifecycle_test"
 	$(CXX) $(HOST_FLAGS) test/report_test.cc source/report.cc -o "$(BUILD)/report_test"
-	$(TEST_TIMEOUT) "$(BUILD)/report_test"
+	$(TEST_TIMEOUT) "$(BUILD)/report_test" "$(VERDICT_VECTORS)"
 	$(CXX) $(HOST_FLAGS) test/storage_test.cc source/storage.cc -o "$(BUILD)/storage_test"
 	$(TEST_TIMEOUT) "$(BUILD)/storage_test"
 	$(CXX) $(HOST_FLAGS) test/keyboard_test.cc source/keyboard.cc -o "$(BUILD)/keyboard_test"
 	$(TEST_TIMEOUT) "$(BUILD)/keyboard_test"
+	$(CXX) $(HOST_FLAGS) test/stdin_source_test.cc source/stdin_source.cc source/keyboard.cc -o "$(BUILD)/stdin_source_test"
+	$(TEST_TIMEOUT) "$(BUILD)/stdin_source_test"
 	$(CXX) $(HOST_FLAGS) -Itest/input_host test/input_test.cc -o "$(BUILD)/input_test"
 	$(TEST_TIMEOUT) "$(BUILD)/input_test"
 

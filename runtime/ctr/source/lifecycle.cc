@@ -9,7 +9,7 @@ void Runner::Exit(int64_t code) {
   exit_code_ = code;
   changed_.Signal();
 }
-Outcome Runner::Run(Application& app) {
+Completion Runner::Run(Application& app, int (*read_exit_code)()) {
   Outcome result = Outcome::pass;
   if (!app.Bootstrap()) result = Outcome::fail;
   while (result == Outcome::pass) {
@@ -34,7 +34,12 @@ Outcome Runner::Run(Application& app) {
     if (!handled) result = Outcome::fail;
   }
   Shutdown(app);
-  return result;
+  if (exited_) return {result, exit_code_};
+  if (result == Outcome::pass) {
+    // As on other platforms, a program that sets exitCode ends with it.
+    if (const int code = read_exit_code()) return {Outcome::fail, code};
+  }
+  return {result, std::nullopt};
 }
 void Runner::Shutdown(Application& app) {
   if (shutdown_) return;

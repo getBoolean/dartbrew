@@ -1,5 +1,6 @@
 #ifndef CTR_LINK_H_
 #define CTR_LINK_H_
+#include "stdin_source.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -30,7 +31,7 @@ class SocketService {
 // TCP connection to the host that started the run (KTD5) over a started
 // SocketService. The launcher sends records; the host sends the program's
 // stdin as raw bytes and shuts down its sending side to end it.
-class Link final : public Sink {
+class Link final : public Sink, public Source {
  public:
   ~Link() { Close(); }
   bool Open(const SocketService& service, const uint8_t address[4], uint16_t port,
@@ -40,9 +41,9 @@ class Link final : public Sink {
   // Blocks until stdin bytes arrive from the host. Returns the number read,
   // 0 once the host ended its input or StopReading was called, or -1 with
   // errno set.
-  intptr_t Read(uint8_t* buffer, intptr_t length);
+  intptr_t Read(uint8_t* buffer, intptr_t length) override;
   // Releases readers within one poll slice; later reads return 0.
-  void StopReading() { stopping_.store(true, std::memory_order_release); }
+  void StopReading() override { stopping_.store(true, std::memory_order_release); }
   void Close();
  private:
   int socket_ = -1;

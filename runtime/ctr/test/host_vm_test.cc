@@ -21,7 +21,8 @@ int main(int argc, char** argv) {
       static_cast<intptr_t>(kernel.size()), {"async", "jit", hash.c_str(), hash.c_str()}};
   ctr::Runner runner;
   ctr::Report report;
-  assert(report.Begin(config, journal, program.build));
+  ctr::RunConfig run;
+  assert(ctr::ReadConfig(config, &run) && report.Begin(run, journal, program.build));
   fclose(config);
   // One optional VM flag, e.g. --link_natives_lazily to take AOT's native path.
   const char* flag = getenv("CTR_TEST_VM_FLAG");
@@ -33,16 +34,17 @@ int main(int argc, char** argv) {
   if (error) { fprintf(stderr, "%s\n", error); free(error); return 1; }
   std::thread stop;
   if (argc == 5) stop = std::thread([&] { getchar(); runner.RequestStop(); });
-  ctr::Outcome result;
+  ctr::Completion completion;
   std::thread owner([&] {
     ctr::Embedder application(program, runner, report);
-    result = runner.Run(application);
+    // Host drivers have no dart:io, so no exitCode.
+    completion = runner.Run(application, [] { return 0; });
   });
   owner.join();
   if (stop.joinable()) stop.join();
   error = Dart_Cleanup();
   if (error) report.Output(error);
-  result = report.End(result, error == nullptr);
+  const ctr::Outcome result = report.End(completion, error == nullptr);
   free(error);
   assert(fclose(journal) == 0);
   return result == ctr::Outcome::pass ? 0 : result == ctr::Outcome::incomplete ? 2 : 1;

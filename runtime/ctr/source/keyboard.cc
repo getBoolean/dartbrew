@@ -35,7 +35,7 @@ bool Keyboard::Serve() {
   changed_.Signal();
   return true;
 }
-void Keyboard::Stop() {
+void Keyboard::StopReading() {
   Lock lock(mutex_);
   ended_ = true;
   changed_.Signal();

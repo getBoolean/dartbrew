@@ -46,13 +46,13 @@ int main() {
   assert(keyboard.Read(&byte, 1) == 0);
   assert(!keyboard.Serve());
 
-  // Stop releases a waiting reader with the end of input.
+  // StopReading releases a waiting reader with the end of input.
   ctr::Keyboard stopped(Never);
   std::thread waiting([&] {
     uint8_t value;
     assert(stopped.Read(&value, 1) == 0);
   });
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
-  stopped.Stop();
+  stopped.StopReading();
   waiting.join();
 }

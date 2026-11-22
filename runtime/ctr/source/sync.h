@@ -1,6 +1,7 @@
 #ifndef CTR_SYNC_H_
 #define CTR_SYNC_H_
 
+#include "priorities.h"
 #include <cstdint>
 #include <cstdlib>
 #if defined(__3DS__)
@@ -63,7 +64,7 @@ class Worker {
   ~Worker() { Join(); }
   bool Start(void (*entry)(void*), void* data) {
 #if defined(__3DS__)
-    native_ = threadCreate(entry, data, 32 * 1024, 0x30, 0, false);
+    native_ = threadCreate(entry, data, 32 * 1024, kApplicationPriority, 0, false);
     if (!native_) return false;
     handle_ = threadGetHandle(native_);
 #else
