@@ -22,15 +22,7 @@ final vectors = _loadVectors();
 List<Case> _loadVectors() {
   // Tests run with the package root as the working directory.
   final file = File(
-    p.join(
-      Directory.current.path,
-      '..',
-      '..',
-      'runtime',
-      'ctr',
-      'test',
-      'verdict_vectors.json',
-    ),
+    p.join(Directory.current.path, 'test', 'data', 'verdict_vectors.json'),
   );
   final json = jsonDecode(file.readAsStringSync()) as Map<String, Object?>;
   Case parse(Map<String, Object?> c) {

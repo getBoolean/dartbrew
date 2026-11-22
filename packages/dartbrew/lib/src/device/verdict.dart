@@ -53,9 +53,7 @@ const _identityKeys = [
 
 /// Computes the verdict of one run from its records, as they arrive.
 ///
-/// This mirrors `runtime/ctr/results.py`; both read
-/// `runtime/ctr/test/verdict_vectors.json`. After the first rule violation
-/// later records are ignored.
+/// After the first rule violation later records are ignored.
 final class VerdictAccumulator {
   /// [expected] is the identity of the run the host started (`run.json`).
   VerdictAccumulator(this.expected);

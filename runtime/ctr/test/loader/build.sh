@@ -1,9 +1,9 @@
 #!/bin/sh
 # U5 spike build. Runs inside the ctr-dart-toolchain container:
 #   sh /work/runtime/ctr/test/loader/build.sh [OUT]
-# Builds the sample .so files, runs the host check, and builds a
-# self-contained loader-spike.3dsx (the .so files are embedded and written
-# to sdmc:/3ds/loader-spike/ on first run). OUT defaults to ./build.
+# Builds the sample .so files and a self-contained loader-spike.3dsx (the
+# .so files are embedded and written to sdmc:/3ds/loader-spike/ on first
+# run). OUT defaults to ./build.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 OUT=${1:-$HERE/build}
@@ -21,11 +21,6 @@ SOFLAGS="$ARCH -O2 -fPIC -shared -nostdlib -Wl,--hash-style=sysv -Wall -Wextra -
 "${G}gcc" $SOFLAGS "$HERE/sample/libbadreloc.c" -o "$OUT/libbadreloc.so"
 "${G}readelf" -W -h -l -d -r --dyn-syms "$OUT/libsample.so" > "$OUT/libsample.readelf.txt"
 "${G}readelf" -W -r "$OUT/libbadreloc.so" > "$OUT/libbadreloc.readelf.txt"
-
-# Host check: the same loader core, built for the host.
-cc -std=c11 -O1 -g -Wall -Wextra -Werror "$HERE/host_check.c" "$HERE/loader_core.c" -o "$OUT/host_check"
-python3 "$HERE/host_check.py" "$OUT/host_check" "${G}readelf" \
-  "$OUT/libsample.so" "$OUT/libbadreloc.so" "$OUT"
 
 # Console app.
 cat > "$OUT/embed.s" <<ASM

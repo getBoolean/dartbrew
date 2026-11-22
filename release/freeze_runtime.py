@@ -2,6 +2,7 @@
 import argparse
 import json
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -11,9 +12,25 @@ sys.path.insert(0, str(ROOT / 'toolchain'))
 from common import (DEFAULT_MANIFEST, DEFAULT_PROFILE, build_identity, file_hash,
                     read_json, source_inputs, verify_icu, verify_source)
 from native_linux import check
-from package_runtime import compiler_command
 from soft_math import prepare
 from native_precompiler import generated_identity
+
+
+def compiler_command(source, build, mode):
+    kind = 'aotruntime' if mode == 'aot' else 'jit'
+    target = f'obj/runtime/vm/libdart_vm_{kind}.os_thread_ctr.o'
+    commands = subprocess.check_output([
+        str(source / 'buildtools/ninja/ninja'), '-C', str(build), '-t', 'commands', target], text=True)
+    command = shlex.split(commands.strip().splitlines()[-1])
+    for flag in ('-MF', '-o', '-c'):
+        index = command.index(flag)
+        del command[index:index + 2]
+    command = [arg for arg in command if arg != '-MMD']
+    if not any(arg.startswith('-I') and (build / arg[2:]).resolve() == source / 'runtime'
+               for arg in command):
+        raise RuntimeError('runtime GN graph includes a different SDK source directory')
+    # Retain GN's relative paths and execute from the same build directory.
+    return command
 
 
 def freeze_runtime(source, build_root, output):

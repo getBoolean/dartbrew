@@ -11,7 +11,6 @@ import zipfile
 
 from bundle_native_sdk import assemble, archive_sdk, checked, digest, read
 from native_dependencies import audit_sdk
-from restore_components import restore_components
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -58,20 +57,9 @@ def build(precompiler, binutils, runtime, output, clang=None, headers=None):
     cpu = {'AMD64': 'x64', 'x86_64': 'x64', 'arm64': 'arm64', 'aarch64': 'arm64'}[platform.machine()]
     if host['host'] != f'{os_name}-{cpu}':
         raise ValueError('producer host differs from native components')
-    restored = restore_components(precompiler, binutils)
-    # Restore executable bits stripped by the Actions artifact transport.
-    for name, record in host['host_dart'].items():
-        path = checked(precompiler / 'host-dart', name, record['sha256'])
-        path.chmod(0o755 if record['executable'] else 0o644)
-    for field in ('executable', 'kernel_compiler'):
-        record = host[field]
-        checked(precompiler, record['path'], record['sha256']).chmod(0o755)
-    arm = read(binutils / 'provenance.json')
-    for name, record in arm['tools'].items():
-        checked(binutils, 'bin/' + name, record['sha256']).chmod(0o755)
-    if clang is not None:
-        tool = read(Path(clang) / 'provenance.json')['tool']
-        checked(Path(clang), tool['path'], tool['sha256']).chmod(0o755)
+    for line in (binutils / 'SHA256SUMS').read_text().splitlines():
+        sha, name = line.split('  ', 1)
+        checked(binutils, name, sha)
     dart = precompiler / 'host-dart/bin' / ('dart' + suffix)
     version = read(ROOT / 'release/preview.json')['version']
     output.mkdir(parents=True)
@@ -145,7 +133,6 @@ def build(precompiler, binutils, runtime, output, clang=None, headers=None):
                    code_generation=codegen,
                    dependency_audit=dependencies,
                    execution_candidates=dict(archive=candidates.name, sha256=digest(candidates)),
-                   restored_transport_files=restored,
                    native_compiler_check=compiler_check,
                    scope='Real host-native build/package checks; target execution remains separate')
     (output / 'verification.json').write_text(json.dumps(receipt, indent=2) + '\n')

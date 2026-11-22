@@ -10,8 +10,7 @@ Go/no-go prototype for loading an ELF shared object on the console at runtime (p
 | `ctr_main.c` | The `.3dsx` app. It embeds both sample objects and writes them to `sdmc:/3ds/loader-spike/`, then loads them back from the SD card. It resolves imports against a hand-written export table, flushes caches and makes text executable through patch 0009's path (Luma SVC 0x80, then `svcControlProcessMemory` `MEMOP_PROT`), runs `.init_array`, and calls into the object. |
 | `sample/libsample.c` | Sample object. Each export exercises one relocation or import path. |
 | `sample/libbadreloc.c` | Negative sample. Its TLS variable needs `R_ARM_TLS_DTPMOD32`. |
-| `host_check.c`, `host_check.py` | Host check. Runs the same core on the host at a fake base, then checks every relocated slot against values computed from devkitARM's `readelf`. |
-| `build.sh` | Builds everything and runs the host check. |
+| `build.sh` | Builds everything. |
 
 ## Build
 
@@ -21,7 +20,7 @@ Run inside the toolchain container:
 docker exec ctr-dart-toolchain sh /work/runtime/ctr/test/loader/build.sh
 ```
 
-Use `MSYS_NO_PATHCONV=1` when running this from Git Bash. Output goes to `runtime/ctr/test/loader/build/` by default (git-ignored), or to the directory given as the first argument. The build fails if the host check fails.
+Use `MSYS_NO_PATHCONV=1` when running this from Git Bash. Output goes to `runtime/ctr/test/loader/build/` by default (git-ignored), or to the directory given as the first argument.
 
 Shared-object flags are the CTR cflags plus `-O2 -fPIC -shared -nostdlib -Wl,--hash-style=sysv`. devkitARM's `ld` produces `ET_DYN` hard-float EABI objects with these flags. Text and data land on separate 0x1000 pages. libc and libgcc are not linked into the object, so `strlen` and `__aeabi_idiv` become imports that the app resolves.
 

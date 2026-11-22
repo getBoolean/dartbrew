@@ -1,5 +1,5 @@
 {
- "description": "Shared journal verdict vectors read by runtime/ctr/test/test_results.py and packages/dartbrew/test/verdict_test.dart. lines are joined with newlines; observation is optional. expect.exit_code is the terminal exit_code the verdict carries (null when absent or when no verdict was reported).",
+ "description": "Journal verdict vectors read by packages/dartbrew/test/verdict_test.dart. lines are joined with newlines; observation is optional. expect.exit_code is the terminal exit_code the verdict carries (null when absent or when no verdict was reported).",
  "cases": [
   {
    "name": "current run passes",

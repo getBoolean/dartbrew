@@ -21,14 +21,14 @@ The console runs Luma3DS. Rosalina's **InputRedirection** accepts button presses
 ## Pressing buttons
 
 ```bash
-python -I .claude/skills/driving-ctr-console/scripts/press.py <console-ip> B Y
+dart .claude/skills/driving-ctr-console/scripts/press.dart <console-ip> B Y
 ```
 
 Each button is held about 150 ms, then released. Buttons: A B X Y L R START SELECT UP DOWN LEFT RIGHT HOME. The packet is the Rosalina/InputRedirectionClient format: five little-endian u32s (pad = 0xfff XOR pressed bits, touch, circle pad, c-stick, interface buttons) to UDP 4950. UDP gives no acknowledgement. The only proof a press landed is what happens next (the netloader accepts a connection, or the user sees it).
 
 ## Arming the netloader and uploading
 
-1. Press **Y only** to start the netloader: `press.py <ip> Y`. Press B only when you know an error dialog is showing. B on the netloader's waiting screen *cancels* it. Never press A blindly: in the Homebrew Launcher menu it launches the selected app.
+1. Press **Y only** to start the netloader: `press.dart <ip> Y`. Press B only when you know an error dialog is showing. B on the netloader's waiting screen *cancels* it. Never press A blindly: in the Homebrew Launcher menu it launches the selected app.
 2. After an app exits, wait about **15 s** before pressing Y. Homebrew Launcher reloads first and drops presses meanwhile. A second Y 3 s later is harmless: Y does nothing on the netloader screen.
 3. Confirm the netloader is armed with `dartbrew devices --wait 5` (UDP only, same subnet). It does not use up the netloader, unlike a TCP connect.
 4. Upload: `dartbrew run -d <ip>` or `dartbrew test -d <ip>`. Each upload uses up the netloader, so arm again before every upload.
@@ -50,7 +50,7 @@ Each button is held about 150 ms, then released. Buttons: A B X Y L R START SELE
 
 - **Networking fixtures need a host peer.** Socket, DNS, HTTP and TLS fixtures talk to a server on the PC, so the PC must be reachable from the console on the same subnet (no NAT in between), with its firewall open for the fixture's port.
 - **A netloader error dialog blocks arming.** While a dialog such as `recv:19` or `inflate:-3` (a corrupted upload) is showing, Y does nothing. Press B to clear it, then Y.
-- **When arming keeps failing, `press.py <ip> B Y` is safe.** B clears an error dialog or cancels a waiting netloader, and Y re-arms it. Confirm with `dartbrew devices --wait 5`.
+- **When arming keeps failing, `press.dart <ip> B Y` is safe.** B clears an error dialog or cancels a waiting netloader, and Y re-arms it. Confirm with `dartbrew devices --wait 5`.
 - **A plain .3dsx spike can serve its log over TCP.** The console listens and the PC connects out to it, so no firewall rule is needed on the PC. That spike serves on TCP 17500 for 90 s (START skips); read it with `curl --max-time 10 telnet://<ip>:17500` or any TCP client. See `serve_log` in `runtime/ctr/test/loader/ctr_main.c`.
 
 ## Crashes and dumps

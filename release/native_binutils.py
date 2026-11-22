@@ -232,8 +232,8 @@ def build(target, work, output):
     source_material.mkdir()
     shutil.copy2(archive, source_material / archive.name)
     for relative in ("release/native_binutils.py", "release/binutils-source.json",
-                     "release/test/test_native_binutils.py", ".github/workflows/native-binutils.yml",
-                     "compose.yaml", "toolchain/versions.json"):
+                     "release/test/test_native_binutils.py", "compose.yaml",
+                     "toolchain/versions.json"):
         destination = source_material / "build-material" / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, destination)
@@ -248,12 +248,11 @@ def build(target, work, output):
         "Producer instructions (SDK recipients use the native binaries directly).\n"
         "The complete unmodified GNU source archive is included beside this file.\n"
         "Build material preserves repository paths under build-material/.\n"
-        "The workflow records producer prerequisites for Windows, macOS, and Linux.\n"
         "From build-material/, run on the matching native host, with fresh directories:\n"
         f"python3 release/native_binutils.py --target {target} --work /absolute/fresh-work --output /absolute/fresh-output\n"
         "On Windows use the MSYS2 MinGW64 producer Python and Windows output paths.\n"
         "On Linux run the command with docker compose exec -T toolchain after preparing\n"
-        "CTR_IMAGE and CTR_STATE_DIR and starting the named service, as in the workflow.\n"
+        "CTR_IMAGE and CTR_STATE_DIR and starting the named service.\n"
         "No build or package installation is needed to run the resulting executables.\n")
     revision = os.environ.get("GITHUB_SHA")
     if revision is None and (ROOT / ".git").exists():

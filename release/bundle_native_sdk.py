@@ -184,7 +184,7 @@ def assemble(cli, precompiler, binutils, runtime, output, version, clang=None, h
 
 
 def archive_sdk(directory, output):
-    """Keep executable modes in the distribution ZIP (Actions artifacts lose them)."""
+    """Keep executable modes in the distribution ZIP."""
     directory, output = Path(directory), Path(output)
     with zipfile.ZipFile(output, 'x', compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(directory.rglob('*')):

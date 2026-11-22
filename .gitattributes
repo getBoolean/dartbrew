@@ -10,4 +10,3 @@ toolchain/*.specs text eol=lf
 release/licenses/*.LICENSE -text whitespace=-blank-at-eol
 
 # Recovery donors must match the original producer checksums on every host.
-release/transport-data/* -text whitespace=-blank-at-eol,cr-at-eol
