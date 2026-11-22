@@ -36,14 +36,18 @@ jobs:
         run: make -C runtime/ctr host-test
   dart:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [dartbrew, release_tools]
     defaults:
       run:
-        working-directory: packages/dartbrew
+        working-directory: packages/${{ matrix.package }}
     steps:
       - uses: actions/checkout@v4
-      - name: Read the pinned Dart SDK version
+      - name: Read the shipped host Dart SDK version
         working-directory: .
-        run: python3 -c 'import json; print("DART_VERSION=" + json.load(open("toolchain/versions.json"))["dart"]["version"])' >> "$GITHUB_ENV"
+        run: python3 -c 'import json; print("DART_VERSION=" + json.load(open("release/preview.json"))["host_sdk"])' >> "$GITHUB_ENV"
       - uses: dart-lang/setup-dart@v1
         with:
           sdk: ${{ env.DART_VERSION }}
