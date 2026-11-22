@@ -42,12 +42,6 @@ class ToolchainTest(unittest.TestCase):
         self.patch = self.base / 'port.patch'
         self.patch.write_bytes(patch.encode())
         self.git('restore', 'feature.txt', cwd=self.upstream)
-        self.profile = self.base / 'profile.json'
-        self.profile.write_text(json.dumps({'name': 'ctr-armv6k', 'target_os': 'ctr',
-            'target_cpu': 'arm', 'arm_version': 6, 'arm_fpu': 'vfp',
-            'arm_float_abi': 'hard', 'arm_use_neon': False,
-            'arm_use_integer_division': False, 'thread_pointer': 'soft',
-            'cflags': ['-marm', '-march=armv6k', '-mfpu=vfp', '-mfloat-abi=hard', '-mtp=soft']}))
         self.manifest = self.base / 'versions.json'
         self.data = {'schema_version': 1,
             'dart': {'repository': str(self.upstream), 'revision': self.rev, 'version': 'fixture'},
@@ -73,12 +67,6 @@ class ToolchainTest(unittest.TestCase):
     def verify(self):
         return run(sys.executable, ROOT / 'bootstrap.py', 'verify', '--manifest', self.manifest,
                    '--source', self.source)
-
-    def identity(self, component='host', mode='aot'):
-        result = run(sys.executable, ROOT / 'build_sdk.py', 'identity', '--manifest', self.manifest,
-                     '--profile', self.profile, '--component', component, '--mode', mode)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        return json.loads(result.stdout)
 
     def test_clean_materialization_reproduces_patch_and_is_idempotent(self):
         first = self.bootstrap()
@@ -189,84 +177,12 @@ class ToolchainTest(unittest.TestCase):
         self.assertIn('hash', result.stderr.lower())
         self.assertFalse(self.source.exists())
 
-    def test_cache_identity_tracks_all_compatibility_inputs(self):
-        initial = self.identity()['cache_key']
-        self.assertNotEqual(initial, self.identity(mode='jit')['cache_key'])
-        self.assertNotEqual(initial, self.identity(component='target')['cache_key'])
-        self.data['dependencies']['depot_tools']['revision'] = '1' * 40
-        self.save_manifest()
-        self.assertNotEqual(initial, self.identity()['cache_key'])
-        self.data['dependencies']['depot_tools']['revision'] = self.rev
-        self.save_manifest()
-        profile = json.loads(self.profile.read_text())
-        profile['cflags'].append('-DNEW_PROFILE=1')
-        self.profile.write_text(json.dumps(profile))
-        self.assertNotEqual(initial, self.identity()['cache_key'])
-        profile['cflags'].pop()
-        self.profile.write_text(json.dumps(profile))
-        self.patch.write_text(self.patch.read_text() + '\n')
-        self.data['patches'][0]['sha256'] = hashlib.sha256(self.patch.read_bytes()).hexdigest()
-        self.save_manifest()
-        self.assertNotEqual(initial, self.identity()['cache_key'])
-
-    def test_host_and_target_configuration_are_separate(self):
-        host = self.identity('host')
-        target = self.identity('target')
-        self.assertEqual(host['gn_args']['target_os'], 'linux')
-        self.assertEqual(host['gn_args']['target_cpu'], 'x64')
-        self.assertNotIn('arm_version', host['gn_args'])
-        self.assertEqual(target['gn_args']['target_os'], 'ctr')
-        self.assertEqual(target['gn_args']['target_cpu'], 'arm')
-        self.assertEqual(target['gn_args']['arm_version'], 6)
-        self.assertFalse(target['gn_args']['arm_use_neon'])
-        self.assertFalse(target['gn_args']['arm_use_integer_division'])
-        self.assertEqual(target['gn_args']['arm_float_abi'], 'hard')
-        self.assertNotEqual(host['cache_key'], target['cache_key'])
-
-    def test_precompiler_runs_on_linux_and_targets_ctr(self):
-        compiler = self.identity('precompiler')
-        self.assertEqual(compiler['executable_os'], 'linux')
-        self.assertEqual(compiler['executable_cpu'], 'x64')
-        self.assertEqual(compiler['gn_args']['target_os'], 'ctr')
-        self.assertEqual(compiler['gn_args']['dart_target_arch'], 'arm')
-        self.assertEqual(compiler['root_target'], '//build/ctr:precompiler')
-        self.assertEqual(self.identity('target', 'aot')['root_target'],
-                         '//build/ctr:aot_runtime')
-        self.assertEqual(self.identity('target', 'jit')['root_target'],
-                         '//build/ctr:jit_runtime')
-
-    def test_specs_content_changes_invalidate_identity(self):
-        profile = json.loads(self.profile.read_text())
-        profile['link_specs'] = ['ctr.specs']
-        self.profile.write_text(json.dumps(profile))
-        specs = self.base / 'ctr.specs'
-        specs.write_text('first specs')
-        initial = self.identity()['cache_key']
-        specs.write_text('changed specs')
-        self.assertNotEqual(initial, self.identity()['cache_key'])
-
-    def test_identical_inputs_in_another_directory_keep_identity(self):
-        profile = json.loads(self.profile.read_text())
-        profile['link_specs'] = ['ctr.specs']
-        self.profile.write_text(json.dumps(profile))
-        specs = self.base / 'ctr.specs'
-        specs.write_text('identical relative specs contents')
-        other = self.base / 'second-location'
-        other.mkdir()
-        for path in (self.manifest, self.profile, self.patch, specs):
-            shutil.copyfile(path, other / path.name)
-        result = run(sys.executable, ROOT / 'build_sdk.py', 'identity',
-                     '--manifest', other / self.manifest.name,
-                     '--profile', other / self.profile.name, '--component', 'target', '--mode', 'aot')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)['cache_key'], self.identity('target')['cache_key'])
-
     def test_pinned_patch_and_specs_bytes_survive_autocrlf_checkout(self):
         shutil.copyfile(ROOT.parent / '.gitattributes', self.upstream / '.gitattributes')
         manifest = json.loads((ROOT / 'versions.json').read_text())
         all_patches = manifest['patches'] + manifest['dependencies'].get('icu', {}).get('patches', [])
         files = [ROOT / patch['path'] for patch in all_patches] + [ROOT / name for name in
-            ('ctr.specs', 'versions.json', 'target-ctr.json', 'common.py', 'build_sdk.py')]
+            ('ctr.specs', 'versions.json', 'target-ctr.json')]
         for path in files:
             destination = self.upstream / 'toolchain' / path.relative_to(ROOT)
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -279,12 +195,6 @@ class ToolchainTest(unittest.TestCase):
             path = checkout / 'toolchain' / patch['path']
             self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), patch['sha256'])
         self.assertEqual((checkout / 'toolchain' / 'ctr.specs').read_bytes(), (ROOT / 'ctr.specs').read_bytes())
-        args = ['identity', '--component', 'target', '--mode', 'aot']
-        copied = run(sys.executable, checkout / 'toolchain' / 'build_sdk.py', *args)
-        original = run(sys.executable, ROOT / 'build_sdk.py', *args)
-        self.assertEqual(copied.returncode, 0, copied.stderr)
-        self.assertEqual(original.returncode, 0, original.stderr)
-        self.assertEqual(json.loads(copied.stdout)['cache_key'], json.loads(original.stdout)['cache_key'])
 
 
 class HostTest(unittest.TestCase):

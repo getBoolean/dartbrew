@@ -12,6 +12,7 @@ dev_dependencies:
   test: 1.33.0
 executables:
   build_precompiler:
+  build_sdk:
   check_release:
   check_upstream:
   update_upstream:
