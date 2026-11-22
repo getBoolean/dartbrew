@@ -42,7 +42,7 @@ def main():
     if not gn.is_file():
         raise RuntimeError(f'pinned GN unavailable: {gn}; bootstrap with --sync-deps first')
     manifest = read_json(args.manifest)
-    if file_hash(gn) != manifest['dependencies']['gn']['binary_sha256']:
+    if file_hash(gn) != manifest['dependencies']['gn']['hosts']['linux-x64']['binary_sha256']:
         raise RuntimeError(f'GN hash mismatch: {gn}; restore the pinned dependency')
     output_root = args.output_root.resolve() if args.output_root else source / 'out' / 'ctr'
     out = output_root / f"{args.component}-{args.mode}-{identity['cache_key'][:16]}"

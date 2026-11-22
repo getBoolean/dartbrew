@@ -2,25 +2,18 @@
 """Producer-only native CTR gen_snapshot build; never shipped as an SDK launcher."""
 import argparse
 import hashlib
-import io
 import json
-import os
 from pathlib import Path
-import platform
 import re
 import shutil
 import subprocess
 import sys
-import urllib.request
-import zipfile
 from contextlib import contextmanager
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'toolchain'))
-from bootstrap import materialize, patch_icu
-from common import (DEFAULT_MANIFEST, command, file_hash, read_json,
-                    source_inputs, verify_icu, verify_source)
+from bootstrap import current_host, fetch_gn, materialize, sync_dependencies
+from common import DEFAULT_MANIFEST, command, file_hash, source_inputs, verify_icu, verify_source
 
-GN_PINS = Path(__file__).with_name('native-host-gn.json')
 ROOT_TARGET = '//runtime/bin:gen_snapshot'
 REQUIRED_DEFINES = {'DART_TARGET_OS_CTR', 'TARGET_ARCH_ARM', 'DART_TARGET_ARMV6K'}
 
@@ -68,103 +61,17 @@ def producer_overlay(source):
         helper.unlink()
 
 
-def native_host(system=None, machine=None):
-    system = system or platform.system()
-    machine = (machine or platform.machine()).lower()
-    host_os = {'Windows': 'windows', 'Darwin': 'macos', 'Linux': 'linux'}.get(system)
-    cpu = {'amd64': 'x64', 'x86_64': 'x64', 'arm64': 'arm64', 'aarch64': 'arm64'}.get(machine)
-    host = f'{host_os}-{cpu}'
-    if host not in read_json(GN_PINS):
-        raise RuntimeError(f'unsupported native producer host: {system}/{machine}')
-    return host
-
-
 def gn_arguments(host):
-    host_os, cpu = host.split('-')
-    current_os = {'windows': 'win', 'macos': 'mac', 'linux': 'linux'}[host_os]
-    arguments = dict(target_os='ctr', target_cpu=cpu, current_os=current_os, current_cpu=cpu,
+    current_os = {'windows': 'win', 'macos': 'mac', 'linux': 'linux'}[host.os]
+    arguments = dict(target_os='ctr', target_cpu=host.cpu, current_os=current_os, current_cpu=host.cpu,
                 dart_target_arch='arm', dart_armv6k=True, dart_use_compressed_pointers=False,
                 dart_use_crashpad=False, dart_support_perfetto=False, is_clang=True,
                 is_debug=False, is_release=True)
-    if host_os == 'macos':
+    if host.os == 'macos':
         # The SDK's relative-sysroot helper assumes an in-source output folder.
         # Producer graphs are out of tree; select the actual Xcode SDK instead.
         arguments['mac_enable_relative_sdk_path'] = False
     return arguments
-
-
-def producer_environment(depot):
-    env = os.environ.copy()
-    env.update(PATH=str(depot) + os.pathsep + env.get('PATH', ''),
-               DEPOT_TOOLS_UPDATE='0', DEPOT_TOOLS_METRICS='0', DEPOT_TOOLS_WIN_TOOLCHAIN='0')
-    count = int(env.get('GIT_CONFIG_COUNT', '0'))
-    env.update(GIT_CONFIG_COUNT=str(count + 1),
-               **{f'GIT_CONFIG_KEY_{count}': 'core.autocrlf', f'GIT_CONFIG_VALUE_{count}': 'false'})
-    return env
-
-
-def gclient_config(source, manifest):
-    return 'solutions = ' + repr([dict(
-        name=source.name, url=manifest['dart']['repository'], managed=False, custom_deps={},
-        custom_vars={**manifest['dependencies']['gclient_variables'], 'dart_root': source.name})]) + '\n'
-
-
-def write_gclient_config(source, manifest):
-    path = source.parent / '.gclient'
-    expected = gclient_config(source, manifest)
-    if path.exists() and path.read_text(encoding='utf-8') != expected:
-        raise RuntimeError(f'unmanaged or mismatched gclient configuration: {path}')
-    path.write_text(expected, encoding='utf-8')
-
-
-def sync_dependencies(source, manifest, depot, manifest_path, host):
-    pin = manifest['dependencies']['dart_deps']
-    if file_hash(source / pin['path']) != pin['sha256']:
-        raise RuntimeError('pinned DEPS hash mismatch')
-    # Check a replayed ICU before gclient can change its checkout. Never reset dirty state.
-    icu = source / 'third_party' / 'icu'
-    if icu.exists():
-        verify_icu(source, manifest)
-    write_gclient_config(source, manifest)
-    materialize(depot, {'dart': manifest['dependencies']['depot_tools'], 'patches': []}, [])
-    env = producer_environment(depot)
-    gclient = depot / ('gclient.bat' if host.startswith('windows-') else 'gclient')
-    command([gclient, 'sync', '--no-history', '--shallow', '--nohooks'],
-            cwd=source.parent, env=env, capture=False)
-    command([gclient, 'runhooks'], cwd=source.parent, env=env, capture=False)
-    patch_icu(source, manifest, manifest_path)
-    verify_icu(source, manifest)
-    verify_source(source, manifest)
-    return env
-
-
-def checked_gn_bytes(archive, pin, filename):
-    if hashlib.sha256(archive).hexdigest() != pin['archive_sha256']:
-        raise RuntimeError('GN archive hash mismatch')
-    with zipfile.ZipFile(io.BytesIO(archive)) as package:
-        data = package.read(filename)
-    if hashlib.sha256(data).hexdigest() != pin['binary_sha256']:
-        raise RuntimeError('GN binary hash mismatch')
-    return data
-
-
-def fetch_gn(directory, manifest, host):
-    pin = read_json(GN_PINS)[host]
-    if pin['revision'] != manifest['dependencies']['gn']['revision']:
-        raise RuntimeError('native GN revision differs from SDK pin')
-    filename = 'gn.exe' if host.startswith('windows-') else 'gn'
-    destination = directory / filename
-    if destination.exists():
-        if file_hash(destination) != pin['binary_sha256']:
-            raise RuntimeError(f'existing GN hash mismatch: {destination}')
-    else:
-        url = 'https://chrome-infra-packages.appspot.com/dl/' + pin['package'] + '/+/' + pin['revision']
-        with urllib.request.urlopen(url, timeout=120) as response:
-            data = checked_gn_bytes(response.read(), pin, filename)
-        directory.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(data)
-        destination.chmod(0o755)
-    return destination, pin
 
 
 def generated_identity(text, source_head):
@@ -194,8 +101,8 @@ def build(work, output, manifest_path, jobs):
         raise RuntimeError('producer jobs must be between 1 and 8')
     if output.exists():
         raise RuntimeError(f'output already exists: {output}; choose an absent directory')
-    host = native_host()
     manifest, patches = source_inputs(manifest_path)
+    host = current_host(manifest)
     source, depot = work / 'sdk', work / 'depot_tools'
     state = materialize(source, manifest, patches)
     env = sync_dependencies(source, manifest, depot, manifest_path, host)
@@ -208,12 +115,11 @@ def build(work, output, manifest_path, jobs):
     if args_path.exists() and args_path.read_text(encoding='utf-8') != args_text:
         raise RuntimeError('existing native build arguments differ; choose a fresh work directory')
     args_path.write_text(args_text, encoding='utf-8')
-    suffix = '.exe' if host.startswith('windows-') else ''
+    suffix = '.exe' if host.is_windows else ''
     ninja = source / 'buildtools' / 'ninja' / ('ninja' + suffix)
-    host_os, host_cpu = host.split('-')
-    compiler_os = {'windows': 'win', 'macos': 'mac', 'linux': 'linux'}[host_os]
-    compiler_name = 'clang-cl.exe' if host_os == 'windows' else 'clang'
-    clang = source / 'buildtools' / f'{compiler_os}-{host_cpu}' / 'clang' / 'bin' / compiler_name
+    compiler_os = {'windows': 'win', 'macos': 'mac', 'linux': 'linux'}[host.os]
+    compiler_name = 'clang-cl.exe' if host.is_windows else 'clang'
+    clang = source / 'buildtools' / f'{compiler_os}-{host.cpu}' / 'clang' / 'bin' / compiler_name
     compiler_version = command([clang, '--version'], env=env)
     ninja_version = command([ninja, '--version'], env=env)
     with producer_overlay(source) as overlay:
@@ -234,7 +140,7 @@ def build(work, output, manifest_path, jobs):
         raise RuntimeError(f'native gen_snapshot --version failed ({probe.returncode}): {probe.stderr}')
     verify_source(source, manifest)
     icu_state = verify_icu(source, manifest)
-    receipt = dict(schema_version=1, component='native-ctr-gen-snapshot', host=host,
+    receipt = dict(schema_version=1, component='native-ctr-gen-snapshot', host=host.name,
                    target='ctr-armv6k', source=state, icu=icu_state, manifest=manifest,
                    producer_overlay=overlay,
                    gn_args=args, root_target=ROOT_TARGET, compiler_defines=defines,

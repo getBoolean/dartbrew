@@ -1,12 +1,10 @@
 """Pure producer contract tests; these do not qualify a native compiler build."""
-import hashlib
 import importlib.util
-import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-import zipfile
 import subprocess
 import ctypes
 import random
@@ -66,13 +64,14 @@ class NativePrecompilerTests(unittest.TestCase):
                 self.assertEqual([(p.key, p.sequence) for p in array], sorted(values, key=lambda p: p[0]))
 
     def test_supported_host_graphs_are_native_with_ctr_arm_backend(self):
+        manifest = json.loads(native.DEFAULT_MANIFEST.read_text(encoding='utf-8'))
         for system, cpu, expected in [('Windows', 'AMD64', 'windows-x64'),
                                       ('Darwin', 'x86_64', 'macos-x64'),
                                       ('Darwin', 'arm64', 'macos-arm64'),
                                       ('Linux', 'x86_64', 'linux-x64')]:
             with self.subTest(host=expected):
-                host = native.native_host(system, cpu)
-                self.assertEqual(host, expected)
+                host = native.current_host(manifest, system, cpu)
+                self.assertEqual(host.name, expected)
                 args = native.gn_arguments(host)
                 self.assertEqual(args['current_cpu'], expected.split('-')[1])
                 self.assertEqual(args['target_cpu'], args['current_cpu'])
@@ -81,43 +80,6 @@ class NativePrecompilerTests(unittest.TestCase):
                 self.assertTrue(args['dart_armv6k'])
                 self.assertFalse(args['dart_use_compressed_pointers'])
                 self.assertFalse(any(key.startswith(('arm_', 'ctr_')) for key in args))
-        with self.assertRaisesRegex(RuntimeError, 'unsupported native'):
-            native.native_host('Windows', 'arm64')
-
-    def test_host_gn_pins_share_sdk_revision(self):
-        manifest = native.read_json(native.DEFAULT_MANIFEST)
-        for pin in native.read_json(native.GN_PINS).values():
-            self.assertEqual(pin['revision'], manifest['dependencies']['gn']['revision'])
-            for key in ('archive_sha256', 'binary_sha256'):
-                self.assertRegex(pin[key], r'^[0-9a-f]{64}$')
-
-    def test_mismatched_gclient_is_preserved(self):
-        manifest = native.read_json(native.DEFAULT_MANIFEST)
-        with tempfile.TemporaryDirectory(prefix='native-precompiler-test-') as temp:
-            source = Path(temp) / 'sdk'
-            config = Path(temp) / '.gclient'
-            config.write_text('owner configuration\n')
-            with self.assertRaisesRegex(RuntimeError, 'unmanaged or mismatched'):
-                native.write_gclient_config(source, manifest)
-            self.assertEqual(config.read_text(), 'owner configuration\n')
-            config.unlink()
-            native.write_gclient_config(source, manifest)
-            native.write_gclient_config(source, manifest)
-            self.assertEqual(config.read_text(), native.gclient_config(source, manifest))
-
-    def test_gn_archive_and_binary_are_both_verified(self):
-        data = b'unit-test bytes, not a compiler'
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, 'w') as archive:
-            archive.writestr('gn', data)
-        archive = buffer.getvalue()
-        pin = dict(archive_sha256=hashlib.sha256(archive).hexdigest(),
-                   binary_sha256=hashlib.sha256(data).hexdigest())
-        self.assertEqual(native.checked_gn_bytes(archive, pin, 'gn'), data)
-        with self.assertRaisesRegex(RuntimeError, 'archive hash'):
-            native.checked_gn_bytes(archive + b'changed', pin, 'gn')
-        with self.assertRaisesRegex(RuntimeError, 'binary hash'):
-            native.checked_gn_bytes(archive, {**pin, 'binary_sha256': '0' * 64}, 'gn')
 
     def test_generated_identity_is_extracted_and_bound_to_source(self):
         head = 'abcdef0123456789abcdef0123456789abcdef01'

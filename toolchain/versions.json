@@ -165,10 +165,29 @@
       "sha256": "d51a35c1d649af503d14ad1617f34473efd50b0991228387a7c42444ccef9303"
     },
     "gn": {
-      "package": "gn/gn/linux-amd64",
       "revision": "git_revision:510ec7992c30f172205792f190e96111a896ba8f",
-      "archive_sha256": "402646b59942320614e10669ef063de3851f234a89e7d95cd4b4b3b2a110d709",
-      "binary_sha256": "520e5777cefd31f3202cd65cc4ddd68fcc7edbcd55ec10c5254ff44ba767d809"
+      "hosts": {
+        "linux-x64": {
+          "package": "gn/gn/linux-amd64",
+          "archive_sha256": "402646b59942320614e10669ef063de3851f234a89e7d95cd4b4b3b2a110d709",
+          "binary_sha256": "520e5777cefd31f3202cd65cc4ddd68fcc7edbcd55ec10c5254ff44ba767d809"
+        },
+        "windows-x64": {
+          "package": "gn/gn/windows-amd64",
+          "archive_sha256": "174d11dc7bc18bf7cbcb1bc79571905afd2740ae9bc531b63818a9e89c59c9be",
+          "binary_sha256": "e98db2df9cc672d49db57fe0f70515800c82156216ec5d2a3c8c59d7defcbccb"
+        },
+        "macos-x64": {
+          "package": "gn/gn/mac-amd64",
+          "archive_sha256": "dfa7d1aeba11768c96880c6603b5b13adbd6d620107d418f7bc72f15825955a6",
+          "binary_sha256": "f99a46eabce062a0ec79257d73fbc2e025b40d814220bb8aaf675322a6de59d3"
+        },
+        "macos-arm64": {
+          "package": "gn/gn/mac-arm64",
+          "archive_sha256": "a6de52657f3d01a073b00aa91db512f85d3ae9d2b2c0ad46949cda4e8204f62a",
+          "binary_sha256": "8b50f57cfac9eba62f07ce5d9ad15d738c6bfeb6e58de33fe2b586800545bee6"
+        }
+      }
     },
     "clang": "git_revision:3493720eca95cf844a8d7e58fdd12e0e5644e7d0",
     "ninja": "version:3@1.13.2.chromium.4",

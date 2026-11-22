@@ -1,5 +1,6 @@
 """Public command integration tests using local Git repositories only."""
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -8,8 +9,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+import bootstrap  # noqa: E402
+from common import DEFAULT_MANIFEST, read_json, verify_icu  # noqa: E402
 
 
 def run(*args, cwd=None):
@@ -65,6 +70,10 @@ class ToolchainTest(unittest.TestCase):
         return run(sys.executable, ROOT / 'bootstrap.py', '--manifest', self.manifest,
                    '--source', self.source)
 
+    def verify(self):
+        return run(sys.executable, ROOT / 'bootstrap.py', 'verify', '--manifest', self.manifest,
+                   '--source', self.source)
+
     def identity(self, component='host', mode='aot'):
         result = run(sys.executable, ROOT / 'build_sdk.py', 'identity', '--manifest', self.manifest,
                      '--profile', self.profile, '--component', component, '--mode', mode)
@@ -83,6 +92,26 @@ class ToolchainTest(unittest.TestCase):
         state = json.loads(first.stdout)
         self.assertEqual(state['upstream_revision'], self.rev)
         self.assertEqual(state['patches'][0]['sha256'], self.data['patches'][0]['sha256'])
+
+    def test_verify_accepts_a_bootstrapped_checkout(self):
+        self.assertEqual(self.bootstrap().returncode, 0)
+        result = self.verify()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['upstream_revision'], self.rev)
+
+    def test_verify_names_a_patch_whose_hash_differs_from_its_pin(self):
+        self.assertEqual(self.bootstrap().returncode, 0)
+        self.patch.write_text('tampered')
+        result = self.verify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('patch hash mismatch', result.stderr)
+        self.assertIn(self.patch.name, result.stderr)
+
+    def test_verify_refuses_a_missing_checkout_without_creating_it(self):
+        result = self.verify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('unmanaged', result.stderr.lower())
+        self.assertFalse(self.source.exists())
 
     def test_dirty_source_is_refused_and_edits_survive(self):
         self.assertEqual(self.bootstrap().returncode, 0)
@@ -118,10 +147,6 @@ class ToolchainTest(unittest.TestCase):
         self.assertFalse(self.source.exists())
 
     def test_icu_patch_is_replayed_and_preserves_local_changes(self):
-        sys.path.insert(0, str(ROOT))
-        self.addCleanup(lambda: sys.path.remove(str(ROOT)))
-        from bootstrap import patch_icu
-        from common import verify_icu
         pin = {**self.data['dart'], 'patches': self.data['patches']}
         self.data['dependencies']['icu'] = pin
         self.save_manifest()
@@ -129,26 +154,26 @@ class ToolchainTest(unittest.TestCase):
         dependency.parent.mkdir(parents=True)
         self.git('clone', str(self.upstream), str(dependency), cwd=self.base)
         self.git('config', 'core.autocrlf', 'false', cwd=dependency)
-        patch_icu(self.source, self.data, self.manifest)
+        bootstrap.patch_icu(self.source, self.data, self.manifest)
         self.assertEqual((dependency / 'feature.txt').read_text(), 'ctr patch\n')
         head = self.git('rev-parse', 'HEAD', cwd=dependency).stdout
-        patch_icu(self.source, self.data, self.manifest)
+        bootstrap.patch_icu(self.source, self.data, self.manifest)
         self.assertEqual(self.git('rev-parse', 'HEAD', cwd=dependency).stdout, head)
         verify_icu(self.source, self.data)
         # gclient can restore the pinned clean dependency on a later sync.
         self.git('checkout', '--detach', self.rev, cwd=dependency)
-        patch_icu(self.source, self.data, self.manifest)
+        bootstrap.patch_icu(self.source, self.data, self.manifest)
         self.assertEqual(self.git('rev-parse', 'HEAD', cwd=dependency).stdout, head)
         (dependency / 'feature.txt').write_text('unexpected committed change\n')
         self.git('add', 'feature.txt', cwd=dependency)
         self.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
                  'commit', '-m', 'unexpected dependency commit', cwd=dependency)
         with self.assertRaisesRegex(RuntimeError, 'mismatch'):
-            patch_icu(self.source, self.data, self.manifest)
+            bootstrap.patch_icu(self.source, self.data, self.manifest)
         self.git('checkout', '--detach', head.strip(), cwd=dependency)
         (dependency / 'feature.txt').write_text('private edit\n')
         with self.assertRaisesRegex(RuntimeError, 'dirty'):
-            patch_icu(self.source, self.data, self.manifest)
+            bootstrap.patch_icu(self.source, self.data, self.manifest)
         self.assertEqual((dependency / 'feature.txt').read_text(), 'private edit\n')
         with self.assertRaisesRegex(RuntimeError, 'dirty'):
             verify_icu(self.source, self.data)
@@ -260,6 +285,57 @@ class ToolchainTest(unittest.TestCase):
         self.assertEqual(copied.returncode, 0, copied.stderr)
         self.assertEqual(original.returncode, 0, original.stderr)
         self.assertEqual(json.loads(copied.stdout)['cache_key'], json.loads(original.stdout)['cache_key'])
+
+
+class HostTest(unittest.TestCase):
+    def test_supported_hosts_select_their_gclient_and_gn_executables(self):
+        manifest = read_json(DEFAULT_MANIFEST)
+        for system, machine, name, gclient, gn in [
+                ('Linux', 'x86_64', 'linux-x64', 'gclient', 'gn'),
+                ('Windows', 'AMD64', 'windows-x64', 'gclient.bat', 'gn.exe'),
+                ('Darwin', 'x86_64', 'macos-x64', 'gclient', 'gn'),
+                ('Darwin', 'arm64', 'macos-arm64', 'gclient', 'gn')]:
+            with self.subTest(host=name):
+                host = bootstrap.current_host(manifest, system, machine)
+                self.assertEqual(host.name, name)
+                self.assertEqual(host.gclient, gclient)
+                self.assertEqual(host.gn, gn)
+                self.assertRegex(bootstrap.gn_pin(manifest, host)['binary_sha256'], r'^[0-9a-f]{64}$')
+
+    def test_unsupported_host_is_refused(self):
+        manifest = read_json(DEFAULT_MANIFEST)
+        for system, machine in [('Windows', 'arm64'), ('Linux', 'aarch64'), ('FreeBSD', 'amd64')]:
+            with self.subTest(system=system, machine=machine):
+                with self.assertRaisesRegex(RuntimeError, 'unsupported host'):
+                    bootstrap.current_host(manifest, system, machine)
+
+    def test_mismatched_gclient_is_preserved(self):
+        manifest = read_json(DEFAULT_MANIFEST)
+        with tempfile.TemporaryDirectory(prefix='bootstrap-test-') as temp:
+            source = Path(temp) / 'sdk'
+            config = Path(temp) / '.gclient'
+            config.write_text('owner configuration\n')
+            with self.assertRaisesRegex(RuntimeError, 'unmanaged or mismatched'):
+                bootstrap.write_gclient_config(source, manifest)
+            self.assertEqual(config.read_text(), 'owner configuration\n')
+            config.unlink()
+            bootstrap.write_gclient_config(source, manifest)
+            bootstrap.write_gclient_config(source, manifest)
+            self.assertEqual(config.read_text(), bootstrap.gclient_config(source, manifest))
+
+    def test_gn_archive_and_binary_are_both_verified(self):
+        data = b'unit-test bytes, not a compiler'
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as archive:
+            archive.writestr('gn', data)
+        archive = buffer.getvalue()
+        pin = dict(archive_sha256=hashlib.sha256(archive).hexdigest(),
+                   binary_sha256=hashlib.sha256(data).hexdigest())
+        self.assertEqual(bootstrap.checked_gn_bytes(archive, pin, 'gn'), data)
+        with self.assertRaisesRegex(RuntimeError, 'archive hash'):
+            bootstrap.checked_gn_bytes(archive + b'changed', pin, 'gn')
+        with self.assertRaisesRegex(RuntimeError, 'binary hash'):
+            bootstrap.checked_gn_bytes(archive, {**pin, 'binary_sha256': '0' * 64}, 'gn')
 
 
 @unittest.skipUnless(os.environ.get('CTR_SDK_INTEGRATION') == '1',
