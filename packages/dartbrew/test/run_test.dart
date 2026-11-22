@@ -249,6 +249,28 @@ void main() {
     expect(r.out, contains('#0      main (file:///bin/main.dart:1:20)'));
   });
 
+  test('exit(3) on the console makes run exit 3 and the verdict carries '
+      'it', () async {
+    final console = await _console((app) async {
+      app
+        ..begin()
+        ..cleanup('pass')
+        ..terminal('fail', exitCode: 3);
+      await app.close();
+    });
+    final r = await _run(_loopbackClient(port: console.port), [
+      '-d',
+      '127.0.0.1',
+      '--verdict',
+    ]);
+
+    expect(r.code, 3);
+    final lines = const LineSplitter().convert(r.out);
+    final verdict = jsonDecode(lines.last) as Map<String, Object?>;
+    expect(verdict['outcome'], 'fail');
+    expect(verdict['exit_code'], 3);
+  });
+
   test('AE2: a connection closed after begin is a lost connection', () async {
     final console = await _console((app) async {
       app.begin();

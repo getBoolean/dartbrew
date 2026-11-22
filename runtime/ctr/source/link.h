@@ -1,5 +1,6 @@
 #ifndef CTR_LINK_H_
 #define CTR_LINK_H_
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -27,16 +28,25 @@ class SocketService {
   std::string error_;
 };
 // TCP connection to the host that started the run (KTD5) over a started
-// SocketService.
+// SocketService. The launcher sends records; the host sends the program's
+// stdin as raw bytes and shuts down its sending side to end it.
 class Link final : public Sink {
  public:
   ~Link() { Close(); }
   bool Open(const SocketService& service, const uint8_t address[4], uint16_t port,
             std::string* error);
   bool Write(const char* data, size_t size) override;
+  bool connected() const { return socket_ >= 0; }
+  // Blocks until stdin bytes arrive from the host. Returns the number read,
+  // 0 once the host ended its input or StopReading was called, or -1 with
+  // errno set.
+  intptr_t Read(uint8_t* buffer, intptr_t length);
+  // Releases readers within one poll slice; later reads return 0.
+  void StopReading() { stopping_.store(true, std::memory_order_release); }
   void Close();
  private:
   int socket_ = -1;
+  std::atomic<bool> stopping_{false};
 };
 }
 #endif

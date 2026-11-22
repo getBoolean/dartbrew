@@ -23,7 +23,7 @@ const defaultHostPort = 17491;
 /// The `run` command, ready for `CommandRunner.addCommand`.
 ///
 /// See [DeviceRunner] for [start], [transportFor], [listenAddress],
-/// [deadlines], [settle] and [azaharHost]. Program output and the `--verdict` JSON go to
+/// [deadlines], [settle], [azaharHost] and [input]. Program output and the `--verdict` JSON go to
 /// [out]; prompts and messages go to [err].
 Command<int> runCommand({
   ProcessStarter start = startProcess,
@@ -32,6 +32,7 @@ Command<int> runCommand({
   RunDeadlines deadlines = const RunDeadlines(),
   Duration settle = const Duration(seconds: 1),
   AzaharHost? azaharHost,
+  Stream<List<int>> Function()? input,
   StringSink? out,
   StringSink? err,
 }) => _RunCommand(
@@ -42,6 +43,7 @@ Command<int> runCommand({
     deadlines: deadlines,
     settle: settle,
     azaharHost: azaharHost,
+    input: input,
   ),
   out ?? stdout,
   err ?? stderr,
@@ -261,6 +263,11 @@ final class DeviceRunner {
   /// Azahar and its SD card; the real host by default.
   final AzaharHost? azaharHost;
 
+  /// Opens the program's stdin, such as the terminal's, to send to the app
+  /// while it runs (see [runOnDevice]); null sends none. Dart's own `stdin`
+  /// can be listened to once, so one runner serves one run with it.
+  final Stream<List<int>> Function()? input;
+
   NativeSdk? _sdk;
 
   DeviceRunner({
@@ -270,6 +277,7 @@ final class DeviceRunner {
     this.deadlines = const RunDeadlines(),
     this.settle = const Duration(seconds: 1),
     this.azaharHost,
+    this.input,
   });
 
   /// Where the host listener binds for a run with [settings]: [listenAddress]
@@ -406,6 +414,7 @@ final class DeviceRunner {
             timeout: settings.timeout,
           ),
           onOutput: onOutput,
+          input: input,
         );
         return DeviceRun(build, output, identity, result);
       } finally {
@@ -494,6 +503,7 @@ class _RunCommand extends Command<int> {
           'reason': result.verdict.reason,
           'run_id': run.identity['run_id'],
           'artifact_sha256': run.identity['artifact_sha256'],
+          'exit_code': ?result.verdict.exitCode,
         }),
       );
     }

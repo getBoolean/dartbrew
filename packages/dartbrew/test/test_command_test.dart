@@ -182,16 +182,37 @@ void main() {
     expect(source, isNot(contains('helper.dart')));
   });
 
-  test('AE3: one pure test and one file read report file I/O as '
+  test('AE3: one pure test and one socket connect report sockets as '
       'unsupported, 1 passed 1 failed, exit 1', () async {
-    final project = _project({'test/io_test.dart': _testFile});
-    final console = await _console(RecordedStream.fileIo());
+    final project = _project({'test/net_test.dart': _testFile});
+    final console = await _console(RecordedStream.unsupportedSocket());
     final r = await _test(project, [], console: console);
 
     expect(r.code, 1);
-    expect(r.out, contains('io_test.dart: reads a file [E]'));
-    expect(r.out, contains('file I/O is not supported on CTR'));
+    expect(r.out, contains('net_test.dart: connects [E]'));
+    expect(r.out, contains('sockets is not supported on CTR'));
     expect(r.out, endsWith('+1 -1: Some tests failed.\n'));
+  });
+
+  test('a test program that calls exit(3) after its tests makes test exit '
+      '3 and says so', () async {
+    final project = _project({'test/a_test.dart': _testFile});
+    final stream = RecordedStream.passing(1);
+    final console = await FakeConsole.start(
+      script: (app) async {
+        app.begin();
+        stream.lines.forEach(app.output);
+        app
+          ..cleanup('pass')
+          ..terminal('fail', exitCode: 3);
+        await app.close();
+      },
+    );
+    addTearDown(console.close);
+    final r = await _test(project, [], console: console);
+
+    expect(r.code, 3);
+    expect(r.out, contains('exit code 3'));
   });
 
   test('a run that stops without done fails the unfinished tests', () async {

@@ -16,7 +16,7 @@ import 'run.dart';
 /// The `test` command, ready for `CommandRunner.addCommand`.
 ///
 /// See [DeviceRunner] for [start], [transportFor], [listenAddress],
-/// [deadlines], [settle] and [azaharHost]. The report goes to [out]; build progress,
+/// [deadlines], [settle], [azaharHost] and [input]. The report goes to [out]; build progress,
 /// prompts and warnings go to [err].
 Command<int> testCommand({
   ProcessStarter start = startProcess,
@@ -25,6 +25,7 @@ Command<int> testCommand({
   RunDeadlines deadlines = const RunDeadlines(),
   Duration settle = const Duration(seconds: 1),
   AzaharHost? azaharHost,
+  Stream<List<int>> Function()? input,
   StringSink? out,
   StringSink? err,
 }) => _TestCommand(
@@ -35,6 +36,7 @@ Command<int> testCommand({
     deadlines: deadlines,
     settle: settle,
     azaharHost: azaharHost,
+    input: input,
   ),
   start,
   out ?? stdout,
@@ -165,10 +167,16 @@ class _TestCommand extends Command<int> {
       }
     }
     final result = run.result;
-    return session.finish(
+    final exited = result.verdict.exitCode;
+    final code = session.finish(
       runExitCode: result.exit.code,
-      runMessage: result.exit.message ?? result.verdict.reason,
+      runMessage:
+          result.exit.message ??
+          result.verdict.reason ??
+          (exited == null ? null : 'exit code $exited'),
     );
+    // A program that ended with exit(n), n != 0, makes the command exit n.
+    return code != 0 && exited != null && exited != 0 ? result.exit.code : code;
   }
 
   /// The test files to run: `*_test.dart` under `test/` or under each

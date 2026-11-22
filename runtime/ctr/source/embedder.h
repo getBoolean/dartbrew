@@ -15,8 +15,11 @@ struct Program {
 };
 class Embedder final : public Application, public TimerTransport {
  public:
-  Embedder(const Program& program, Runner& runner, Report& report)
-      : program_(program), runner_(runner), report_(report), timers_(*this) {}
+  // |script| is dart:io's Platform.script: the application file in the CTR
+  // path model ("/3ds/x.3dsx"), or empty when argv names none.
+  Embedder(const Program& program, Runner& runner, Report& report,
+           const char* script = nullptr)
+      : program_(program), runner_(runner), report_(report), script_(script), timers_(*this) {}
   bool Bootstrap() override;
   bool HasLivePorts() override;
   bool HandleMessage() override;
@@ -36,6 +39,7 @@ class Embedder final : public Application, public TimerTransport {
   const Program& program_;
   Runner& runner_;
   Report& report_;
+  const char* script_;
   TimerWorker timers_;
   Dart_Isolate isolate_ = nullptr;
   bool post_failed_ = false;  // Read by the owner only after timer-worker join.

@@ -26,8 +26,10 @@ CommandRunner<int> createRunner() {
         )
         ..addCommand(createCommand())
         ..addCommand(compileCommand())
-        ..addCommand(runCommand())
-        ..addCommand(testCommand())
+        // The terminal's stdin becomes the app's stdin (R3). It is opened
+        // only when an app connects.
+        ..addCommand(runCommand(input: () => stdin))
+        ..addCommand(testCommand(input: () => stdin))
         ..addCommand(devicesCommand())
         ..addCommand(DoctorCommand());
   passthroughCommands().forEach(runner.addCommand);

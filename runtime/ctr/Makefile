@@ -4,7 +4,7 @@ BUILD ?=
 VM_BUILD ?=
 CXX ?= g++
 HOST_FLAGS = -std=c++20 -Wall -Wextra -Werror -pthread -Isource
-SOURCES = source/embedder.cc source/lifecycle.cc source/timer_worker.cc source/report.cc source/link.cc source/unsupported.cc
+SOURCES = source/embedder.cc source/lifecycle.cc source/timer_worker.cc source/report.cc source/link.cc source/unsupported.cc source/keyboard.cc source/storage.cc
 
 .PHONY: host-test host-vm check-build native-objects
 check-build:
@@ -20,10 +20,17 @@ host-test: check-build
 	$(CXX) $(HOST_FLAGS) -I"$(SDK)/runtime/include" -c source/unsupported.cc -o "$(BUILD)/unsupported.o"
 	$(CXX) $(HOST_FLAGS) test/report_test.cc source/report.cc -o "$(BUILD)/report_test"
 	timeout 20 "$(BUILD)/report_test"
+	$(CXX) $(HOST_FLAGS) test/storage_test.cc source/storage.cc -o "$(BUILD)/storage_test"
+	timeout 20 "$(BUILD)/storage_test"
+	$(CXX) $(HOST_FLAGS) test/keyboard_test.cc source/keyboard.cc -o "$(BUILD)/keyboard_test"
+	timeout 20 "$(BUILD)/keyboard_test"
 	# The dart:io event handler's poll set from the SDK checkout (patch 0035).
 	$(CXX) $(HOST_FLAGS) -DDART_CTR_POLL_HOST_TEST -I"$(SDK)/runtime" test/eventhandler_host_test.cc \
 	  "$(SDK)/runtime/bin/eventhandler_ctr_poll.cc" -o "$(BUILD)/eventhandler_host_test"
 	timeout 20 "$(BUILD)/eventhandler_host_test"
+	# The dart:io path model from the SDK checkout (patch 0036).
+	$(CXX) $(HOST_FLAGS) -DDART_CTR_PATH_HOST_TEST -I"$(SDK)/runtime" test/path_host_test.cc 	  "$(SDK)/runtime/bin/path_ctr.cc" -o "$(BUILD)/path_host_test"
+	timeout 20 "$(BUILD)/path_host_test"
 	python3 -m unittest discover -s test -p 'test_*.py' -v
 
 # Link the integration driver with the SDK's successfully linked host VM.

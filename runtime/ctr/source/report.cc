@@ -113,6 +113,9 @@ ArgIdentity ReadArgs(int argc, char** argv, const BuildIdentity& build,
 Report::~Report() = default;
 void Report::Emit(const std::string& record) {
   Lock lock(mutex_);
+  EmitLocked(record);
+}
+void Report::EmitLocked(const std::string& record) {
   if (fprintf(stdout, "CTR_RUNTIME %s\n", record.c_str()) < 0 || fflush(stdout)) failed_ = true;
   if (fprintf(journal_, "CTR_RUNTIME %s\n", record.c_str()) < 0 || fflush(journal_)) failed_ = true;
   if (sink_) {
@@ -152,18 +155,53 @@ bool Report::Begin(const RunConfig& run, FILE* journal, const BuildIdentity& bui
   if (!failed_ && !notice.empty()) Output(notice.c_str());
   return !failed_;
 }
-void Report::Output(const char* text) {
-  if (!active_ || ended_) { failed_ = true; return; }
-  Emit("{\"event\":\"output\",\"run_id\":" + Quote(run_) + ",\"text\":" + Quote(text) + "}");
+void Report::OutputLocked(const std::string& text) {
+  EmitLocked("{\"event\":\"output\",\"run_id\":" + Quote(run_) + ",\"text\":" + Quote(text) + "}");
 }
-Outcome Report::End(Outcome execution, bool cleanup) {
+void Report::FlushStdioLocked() {
+  for (std::string& line : stdio_) {
+    if (line.empty()) continue;
+    OutputLocked(line);
+    line.clear();
+  }
+}
+void Report::Output(const char* text) {
+  Lock lock(mutex_);
+  if (!active_ || ended_) { failed_ = true; return; }
+  FlushStdioLocked();
+  OutputLocked(text);
+}
+void Report::Flush() {
+  Lock lock(mutex_);
+  if (active_ && !ended_) FlushStdioLocked();
+}
+void Report::Stdio(int fd, const char* data, size_t size) {
+  Lock lock(mutex_);
+  if (!active_ || ended_ || (fd != 1 && fd != 2)) { failed_ = true; return; }
+  std::string& line = stdio_[fd - 1];
+  for (const char* end; size && (end = static_cast<const char*>(memchr(data, '\n', size)));) {
+    line.append(data, end);
+    OutputLocked(line);
+    line.clear();
+    size -= static_cast<size_t>(end + 1 - data);
+    data = end + 1;
+  }
+  line.append(data, size);
+}
+Outcome Report::End(Outcome execution, bool cleanup, std::optional<int64_t> exit_code) {
   if (!active_ || ended_) return Outcome::fail;
+  {
+    Lock lock(mutex_);
+    FlushStdioLocked();
+  }
   if (!cleanup || failed_) execution = Outcome::fail;
   const char* outcome = execution == Outcome::pass ? "pass" : execution == Outcome::fail ? "fail" : "incomplete";
   Emit("{\"event\":\"assert\",\"run_id\":" + Quote(run_) +
        ",\"name\":\"cleanup\",\"status\":" + Quote(cleanup ? "pass" : "fail") + "}");
   if (failed_) { execution = Outcome::fail; outcome = "fail"; }
-  Emit("{\"event\":\"terminal\",\"run_id\":" + Quote(run_) + ",\"outcome\":" + Quote(outcome) + ",\"assertions\":1}");
+  std::string code = exit_code ? ",\"exit_code\":" + std::to_string(*exit_code) : "";
+  Emit("{\"event\":\"terminal\",\"run_id\":" + Quote(run_) + ",\"outcome\":" + Quote(outcome) +
+       ",\"assertions\":1" + code + "}");
   ended_ = true;
   return failed_ ? Outcome::fail : execution;
 }

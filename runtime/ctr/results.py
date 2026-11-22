@@ -53,11 +53,19 @@ def validate(journal, expected, observation=None):
         if not active or terminal is None or cleanup is None or terminal.get('assertions') != 1:
             raise ValueError('missing begin, cleanup or terminal')
         outcome = terminal.get('outcome')
-        if outcome not in ('pass', 'fail', 'incomplete') or (cleanup == 'fail' and outcome != 'fail'):
+        # exit(n) and a nonzero exitCode end the run with exit_code: 0 passes,
+        # any other code fails carrying it.
+        exit_code = terminal.get('exit_code')
+        if 'exit_code' in terminal and (not isinstance(exit_code, int) or isinstance(exit_code, bool)):
+            raise ValueError('invalid exit code')
+        if (outcome not in ('pass', 'fail', 'incomplete') or (cleanup == 'fail' and outcome != 'fail')
+                or (exit_code is not None and (outcome == 'incomplete' or (outcome == 'pass' and exit_code != 0)))):
             raise ValueError('contradictory outcome')
         if observation == 'crash':
             raise ValueError('host observed crash')
         result['outcome'] = outcome
+        if exit_code is not None:
+            result['exit_code'] = exit_code
     except (KeyError, TypeError, ValueError) as error:
         result['reason'] = str(error)
     return result

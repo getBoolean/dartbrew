@@ -70,14 +70,19 @@ bool Embedder::Bootstrap() {
 #if defined(__3DS__)
     // The SDK's own dart:io setup: the ported I/O layer's natives, and io's
     // _setupHooks, which moves timers from the _ctr hooks to the dart:io event
-    // handler. print and Uri.base keep the _ctr closures set above.
+    // handler. print keeps the _ctr closure set above. exit() reaches the
+    // launcher's exit hook and ends the run (main.cc).
     dart::bin::DartIoSettings settings;
-    // exit() would reach Platform::_Exit, which is not ported yet; this makes
-    // it throw a catchable UnsupportedError in Dart first.
-    settings.disable_exit = true;
+    settings.script_uri = script_;
     // There is no VM service to register the extension with.
     settings.enable_network_profiling = false;
     if (!Check(dart::bin::SetupDartIoLibrary(settings))) return false;
+    // Uri.base follows Directory.current, as on other platforms; the _ctr
+    // closure stays only for images without dart:io.
+    Dart_Handle io_uri_base = Call(io, "_getUriBaseClosure");
+    if (!Check(io_uri_base) ||
+        !Check(Dart_SetField(Library("dart:core"), String("_uriBaseClosure"), io_uri_base)))
+      return false;
 #else
     // Host drivers have no CTR I/O layer: every dart:io native is unsupported.
     if (!Check(Dart_SetNativeResolver(io, ResolveUnsupported, nullptr))) return false;
@@ -102,7 +107,9 @@ bool Embedder::Bootstrap() {
 bool Embedder::HasLivePorts() { return Dart_HasLivePorts(); }
 bool Embedder::HandleMessage() {
   Dart_EnterScope();
-  bool ok = Check(Dart_HandleMessage());
+  Dart_Handle result = Dart_HandleMessage();
+  // exit() unwinds the isolate with an error once its hook told the runner.
+  bool ok = runner_.exited() || Check(result);
   Dart_ExitScope();
   return ok;
 }

@@ -124,17 +124,17 @@ void main() {
     ]);
   });
 
-  test('AE3: a file read names file I/O as unsupported, 1 passed 1 failed, '
-      'exit 1', () {
-    final r = _render(RecordedStream.fileIo().lines);
+  test('AE3: a socket connect names sockets as unsupported, 1 passed 1 '
+      'failed, exit 1', () {
+    final r = _render(RecordedStream.unsupportedSocket().lines);
 
     expect(r.code, 1);
     expect(
       r.out,
       contains(
-        '00:00 +1 -1: test/io_test.dart: reads a file [E]\n'
-        '  file I/O is not supported on CTR.\n'
-        "  Invalid argument(s): native function 'File_Open'",
+        '00:00 +1 -1: test/net_test.dart: connects [E]\n'
+        '  sockets is not supported on CTR.\n'
+        "  SocketException: Failed host lookup: 'example.com'",
       ),
     );
     expect(r.out, endsWith('00:00 +1 -1: Some tests failed.\n'));
@@ -199,7 +199,7 @@ void main() {
       ..start(suite, 'three');
     final r = _render([
       ...stream.lines,
-      "Failed to resolve native function 'File_Open' in '_File._open'",
+      "Failed to resolve native function 'Socket_CreateConnect'",
     ], runMessage: 'lost connection');
 
     expect(r.code, 1);
@@ -210,7 +210,7 @@ void main() {
       r.out,
       contains(
         'test/a_test.dart: three [E]\n'
-        '  file I/O is not supported on CTR. The test program stopped after:',
+        '  sockets is not supported on CTR. The test program stopped after:',
       ),
     );
     expect(
@@ -254,7 +254,7 @@ void main() {
 
   test('--reporter json follows the public protocol with host-added start, '
       'allSuites and done, and drops dartbrew.plan', () {
-    final lines = RecordedStream.fileIo().lines;
+    final lines = RecordedStream.unsupportedSocket().lines;
     final r = _render([...lines, 'a print outside any test'], json: true);
 
     expect(r.code, 1);
@@ -275,7 +275,7 @@ void main() {
     expect(events.map((e) => e['type']), isNot(contains('dartbrew.plan')));
     expect(
       events.where((e) => e['type'] == 'error').single['error'],
-      startsWith('file I/O is not supported on CTR.\n'),
+      startsWith('sockets is not supported on CTR.\n'),
     );
     expect(r.err, 'a print outside any test\n');
   });

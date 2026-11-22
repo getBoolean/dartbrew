@@ -126,6 +126,85 @@ void main() {
       expect(result.verdict.output, ['hello']);
     });
 
+    test(
+      'forwards input to the app and ends it by closing the host side',
+      () async {
+        final listener = await ServerSocket.bind(
+          InternetAddress.loopbackIPv4,
+          0,
+        );
+        addTearDown(listener.close);
+        final received = <int>[];
+        final device = _FakeDevice(
+          accepts: (_) => true,
+          onLaunch: (port) async {
+            final app = await Socket.connect(
+              InternetAddress.loopbackIPv4,
+              port,
+            );
+            // The app reads stdin to its end, then reports and closes.
+            app.listen(
+              received.addAll,
+              onDone: () async {
+                app.write(_passingRun());
+                await app.flush();
+                await app.close();
+              },
+            );
+          },
+        );
+
+        final result = await runOnDevice(
+          device: device,
+          app: File('unused.3dsx'),
+          identity: _identity,
+          listener: listener,
+          input: () => Stream.fromIterable([
+            utf8.encode('line one\n'),
+            utf8.encode('line two\n'),
+          ]),
+          deadlines: const RunDeadlines(
+            connect: Duration(seconds: 5),
+            idle: Duration(seconds: 5),
+          ),
+        );
+
+        expect(utf8.decode(received), 'line one\nline two\n');
+        expect(result.verdict.outcome, Outcome.pass);
+      },
+    );
+
+    test('stops reading input that never ends when the run ends', () async {
+      final listener = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(listener.close);
+      final input = StreamController<List<int>>();
+      final device = _FakeDevice(
+        accepts: (_) => true,
+        onLaunch: (port) async {
+          final app = await Socket.connect(InternetAddress.loopbackIPv4, port);
+          app.listen((_) {}, onError: (Object _) {});
+          app.write(_passingRun());
+          await app.flush();
+          await app.close();
+        },
+      );
+
+      final result = await runOnDevice(
+        device: device,
+        app: File('unused.3dsx'),
+        identity: _identity,
+        listener: listener,
+        input: () => input.stream,
+        deadlines: const RunDeadlines(
+          connect: Duration(seconds: 5),
+          idle: Duration(seconds: 5),
+        ),
+      );
+
+      expect(result.verdict.outcome, Outcome.pass);
+      expect(input.hasListener, isFalse);
+    });
+
     test('a console accepts only its own address', () {
       final device = ConsoleDevice(
         NetloaderClient(),

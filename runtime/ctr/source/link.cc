@@ -8,6 +8,7 @@
 #include <cstring>
 #include <malloc.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -75,9 +76,29 @@ bool Link::Write(const char* data, size_t size) {
   }
   return socket_ >= 0;
 }
+intptr_t Link::Read(uint8_t* buffer, intptr_t length) {
+  // soc's poll() may wait out its whole timeout before reporting a ready
+  // socket (libctru#412), so readers wait in short slices and check for stop.
+  constexpr int kSliceMs = 100;
+  while (socket_ >= 0 && !stopping_.load(std::memory_order_acquire)) {
+    pollfd ready = {socket_, POLLIN, 0};
+    const int result = poll(&ready, 1, kSliceMs);
+    if (result < 0) return -1;
+    if (result == 0) continue;
+    const ssize_t received = recv(socket_, buffer, static_cast<size_t>(length), 0);
+    if (received >= 0) return received;
+    if (errno != EAGAIN && errno != EWOULDBLOCK) return -1;
+  }
+  return 0;
+}
 void Link::Close() {
   if (socket_ >= 0) {
     shutdown(socket_, SHUT_WR);
+    // Discard stdin the program never read: closing with unread bytes can
+    // reset the connection before the host has read the last records.
+    char unread[256];
+    for (pollfd ready = {socket_, POLLIN, 0};
+         poll(&ready, 1, 0) > 0 && recv(socket_, unread, sizeof(unread), 0) > 0;) {}
     close(socket_);
     socket_ = -1;
   }
@@ -94,6 +115,7 @@ bool Link::Open(const SocketService&, const uint8_t[4], uint16_t, std::string* e
   return false;
 }
 bool Link::Write(const char*, size_t) { return false; }
+intptr_t Link::Read(uint8_t*, intptr_t) { return 0; }
 void Link::Close() {}
 #endif
 }

@@ -1,0 +1,20 @@
+os:ctr
+environment:0
+processors:true
+locale:true
+hostname:3ds
+os-version:true
+version:true
+executable:true
+script:true
+pid:true
+separator:/
+stdout line
+print line
+stderr line
+partial
+ then print
+stdin:0
+sleep:true
+process:Process is not supported on CTR (dart:io)
+exit-code:0

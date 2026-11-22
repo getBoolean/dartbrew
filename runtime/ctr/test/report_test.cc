@@ -194,9 +194,76 @@ void ArgvIdentity() {
   };
   for (const auto& tokens : invalid) assert(Args(tokens, host, &run) == ctr::ArgIdentity::invalid);
 }
+std::string OutputRecord(const std::string& text) {
+  return "CTR_RUNTIME {\"event\":\"output\",\"run_id\":\"" + run_id + "\",\"text\":\"" + text +
+      "\"}\n";
+}
+
+// stdout and stderr bytes become one output record per line, in order with
+// print records; a partial line is flushed before the next print and at End.
+void StandardStreams() {
+  ctr::RunConfig run;
+  assert(Read(Identity("2"), &run));
+  FILE* journal = tmpfile();
+  ctr::Report report;
+  assert(report.Begin(run, journal, build));
+  const std::string begin = Contents(journal);
+  report.Stdio(1, "one\ntw", 6);
+  report.Stdio(1, "o\n", 2);
+  report.Stdio(2, "err\n", 4);
+  report.Stdio(1, "partial", 7);
+  report.Output("print");
+  report.Stdio(2, "tail", 4);
+  assert(report.End(ctr::Outcome::pass, true, 0) == ctr::Outcome::pass);
+  const std::string records = Contents(journal).substr(begin.size());
+  const std::string expected = OutputRecord("one") + OutputRecord("two") + OutputRecord("err") +
+      OutputRecord("partial") + OutputRecord("print") + OutputRecord("tail");
+  assert(records.compare(0, expected.size(), expected) == 0);
+  // exit(0) carries its code on the terminal record.
+  assert(records.find("\"outcome\":\"pass\",\"assertions\":1,\"exit_code\":0}") != std::string::npos);
+  fclose(journal);
+}
+
+// A prompt written without a newline is shown before the program reads stdin.
+void PromptFlush() {
+  ctr::RunConfig run;
+  assert(Read(Identity("2"), &run));
+  FILE* journal = tmpfile();
+  ctr::Report report;
+  assert(report.Begin(run, journal, build));
+  report.Stdio(1, "Name: ", 6);
+  report.Flush();
+  assert(Contents(journal).find(OutputRecord("Name: ")) != std::string::npos);
+  report.Flush();  // Nothing pending: no empty record.
+  assert(report.End(ctr::Outcome::pass, true) == ctr::Outcome::pass);
+  assert(Contents(journal).find(OutputRecord("")) == std::string::npos);
+  fclose(journal);
+}
+
+// exit(n) with n != 0 fails carrying n; without a code the terminal is unchanged.
+void ExitCodes() {
+  ctr::RunConfig run;
+  assert(Read(Identity("2"), &run));
+  FILE* journal = tmpfile();
+  ctr::Report exited;
+  assert(exited.Begin(run, journal, build));
+  assert(exited.End(ctr::Outcome::fail, true, 3) == ctr::Outcome::fail);
+  assert(Contents(journal).find("\"outcome\":\"fail\",\"assertions\":1,\"exit_code\":3}") !=
+         std::string::npos);
+  fclose(journal);
+  journal = tmpfile();
+  ctr::Report plain;
+  assert(plain.Begin(run, journal, build));
+  assert(plain.End(ctr::Outcome::pass, true) == ctr::Outcome::pass);
+  assert(Contents(journal).find("exit_code") == std::string::npos);
+  fclose(journal);
+}
 }  // namespace
 
 int main() {
+  StandardStreams();
+  PromptFlush();
+  ExitCodes();
   LegacyFileBegin();
   ConfigSchemas();
   SchemaTwoBegin(Identity("2"));

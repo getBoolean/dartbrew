@@ -5,6 +5,7 @@
 #include "sync.h"
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <string>
 namespace ctr {
 struct BuildIdentity {
@@ -37,15 +38,30 @@ class Report {
   // A non-empty notice is emitted as the first output record after begin.
   bool Begin(const RunConfig& run, FILE* journal, const BuildIdentity& build,
              const std::string& notice = {});
+  // A print record. Partial stdout/stderr lines are emitted first, so the
+  // records keep the program's order.
   void Output(const char* text);
-  Outcome End(Outcome execution, bool cleanup);
+  // dart:io stdout (fd 1) or stderr (fd 2) bytes. Each completed line becomes
+  // an output record without its LF; the rest waits for its LF, the next
+  // print or End.
+  void Stdio(int fd, const char* data, size_t size);
+  // Emits partial stdout/stderr lines now, so a prompt shows before the
+  // program waits for stdin.
+  void Flush();
+  // exit_code is set when the program ended through exit() or a nonzero
+  // exitCode; the terminal record then carries it.
+  Outcome End(Outcome execution, bool cleanup, std::optional<int64_t> exit_code = std::nullopt);
   // Records also go to the attached sink; a failed write detaches it.
   void Attach(Sink* sink);
   // Bare newline to the attached sink only, never stdout or the journal.
   void Keepalive();
  private:
   void Emit(const std::string& record);
-  Mutex mutex_;  // Serializes every record and keepalive.
+  void EmitLocked(const std::string& record);
+  void OutputLocked(const std::string& text);
+  void FlushStdioLocked();
+  Mutex mutex_;  // Serializes every record and keepalive, and the stdio lines.
+  std::string stdio_[2];  // Partial stdout and stderr lines.
   Sink* sink_ = nullptr;
   FILE* journal_ = nullptr;  // Borrowed; launcher closes after VM cleanup.
   std::string run_;

@@ -20,6 +20,7 @@ class JournalTest(unittest.TestCase):
                 self.assertEqual(value['outcome'], expect['outcome'], value)
                 self.assertEqual(value.get('reason'), expect['reason'], value)
                 self.assertEqual(value['output'], expect['output'], value)
+                self.assertEqual(value.get('exit_code'), expect.get('exit_code'), value)
 
     def test_truncation_at_every_record_boundary(self):
         case = VECTORS[0]

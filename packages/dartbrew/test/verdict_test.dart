@@ -14,6 +14,7 @@ typedef Case = ({
   Outcome outcome,
   String? reason,
   List<String> output,
+  int? exitCode,
 });
 
 final vectors = _loadVectors();
@@ -45,6 +46,7 @@ List<Case> _loadVectors() {
       outcome: Outcome.values.byName(expect['outcome']! as String),
       reason: expect['reason'] as String?,
       output: (expect['output']! as List<Object?>).cast<String>(),
+      exitCode: expect['exit_code'] as int?,
     );
   }
 
@@ -99,6 +101,7 @@ void main() {
         expect(verdict.outcome, c.outcome);
         expect(verdict.reason, c.reason);
         expect(verdict.output, c.output);
+        expect(verdict.exitCode, c.exitCode);
       });
 
       test('${c.name} (one byte at a time)', () {
@@ -108,6 +111,7 @@ void main() {
         expect(verdict.outcome, c.outcome);
         expect(verdict.reason, c.reason);
         expect(verdict.output, c.output);
+        expect(verdict.exitCode, c.exitCode);
       });
     }
   });
@@ -213,6 +217,23 @@ void main() {
       for (final end in StreamEnd.values) {
         final exit = exitFor(reportedFail, end);
         expect((exit.code, exit.message), (255, null));
+      }
+    });
+
+    test('fail with an exit code exits with that code', () {
+      const exited = Verdict(Outcome.fail, null, [], exitCode: 3);
+      expect(exitFor(exited, StreamEnd.closed).code, 3);
+    });
+
+    test('fail with exit code 0 still exits 255', () {
+      const cleanupFailed = Verdict(Outcome.fail, null, [], exitCode: 0);
+      expect(exitFor(cleanupFailed, StreamEnd.closed).code, 255);
+    });
+
+    test('exit codes a process cannot exit with become 255', () {
+      for (final code in [256, -1, 1000]) {
+        final verdict = Verdict(Outcome.fail, null, [], exitCode: code);
+        expect(exitFor(verdict, StreamEnd.closed).code, 255);
       }
     });
 

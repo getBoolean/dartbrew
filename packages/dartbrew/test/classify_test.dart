@@ -3,28 +3,28 @@ import 'package:test/test.dart';
 
 void main() {
   final cases = {
-    "Failed to resolve native function 'File_Open' in '_File._open'":
-        'file I/O',
-    "Invalid argument(s): native function 'Directory_Exists' (1 arguments) "
-            'cannot be found':
-        'file I/O',
-    "Failed to resolve native function 'IOService_NewServicePort' in "
-            "'_IOService._newServicePort'":
-        'file I/O',
     "Failed to resolve native function 'Socket_CreateConnect' in "
             "'_NativeSocket.createConnect'":
         'sockets',
     "Failed to resolve native function 'InternetAddress_Parse' in "
             "'_InternetAddress._parse'":
         'sockets',
+    // The CTR I/O layer's text for an area not ported yet.
+    "SocketException: Failed host lookup: 'example.com' (OS Error: "
+            'InternetAddress is not supported on CTR (dart:io), errno = 38)':
+        'sockets',
     "Failed to resolve native function 'Process_Start' in "
             "'_ProcessImpl._startNative'":
         'processes',
-    "Failed to resolve native function 'Process_Exit' in '_ProcessUtils._exit'":
-        'stdout, stdin and exit()',
-    "Failed to resolve native function 'File_GetStdioHandleType' in "
-            "'_StdIOUtils._getStdioHandleType'":
-        'stdout, stdin and exit()',
+    'ProcessException: Process is not supported on CTR (dart:io)\n'
+            '  Command: ls':
+        'processes',
+    "FileSystemException: Cannot create link to target 'b', path = 'a' "
+            '(OS Error: Link is not supported on CTR (dart:io), errno = 38)':
+        'links',
+    'FileSystemException: File system watching is not supported on this '
+            'platform':
+        'file system watching',
     'IsolateSpawnException: Unable to spawn isolate: no isolate group':
         'isolates',
     // Observed on a New 3DS (AOT and JIT).
@@ -33,17 +33,11 @@ void main() {
     "Unsupported operation: Can't connect to the test runner.\n"
             'spawnHybridUri() is currently only supported within "dart test".':
         'hybrid tests (spawnHybridUri and spawnHybridCode)',
-    // The launcher's dart:io fallback resolver (runtime/ctr/source/
-    // unsupported.cc) throws UnsupportedError naming the native.
-    'Unsupported operation: Namespace_GetDefault is not supported on CTR '
-            '(dart:io)':
-        'file I/O',
+    // A host driver's fallback resolver names the native; the stack names
+    // the area.
     'Unsupported operation: Platform_OperatingSystem is not supported on '
             'CTR (dart:io)\n#0      _ProcessImpl._start':
         'processes',
-    'Unsupported operation: Platform_NumberOfProcessors is not supported on '
-            'CTR (dart:io)':
-        'platform information (Platform)',
     'Unsupported operation: Platform_GetVersion is not supported on CTR '
             '(dart:io)\n#0      _HttpClient._openUrl':
         'sockets',
@@ -61,8 +55,8 @@ void main() {
 
   test('the message names the area and the target', () {
     expect(
-      classifyUnsupported("native function 'File_Open'")!.message,
-      'file I/O is not supported on CTR',
+      classifyUnsupported("native function 'Socket_CreateConnect'")!.message,
+      'sockets is not supported on CTR',
     );
   });
 
@@ -70,5 +64,21 @@ void main() {
     expect(classifyUnsupported('Expected: <8>\n  Actual: <7>'), isNull);
     expect(classifyUnsupported('Bad state: boom'), isNull);
     expect(classifyUnsupported('lost connection'), isNull);
+  });
+
+  test('failures of the working dart:io areas are not attributed', () {
+    // Files, stdio, Platform and exit work on CTR; their errors are ordinary.
+    expect(
+      classifyUnsupported(
+        "PathNotFoundException: Cannot open file, path = 'x' (OS Error: No "
+        'such file or directory, errno = 2)\n#0      _File.open',
+      ),
+      isNull,
+    );
+    expect(
+      classifyUnsupported('#0      _RandomAccessFile.readSync\n#1 _StdIOUtils'),
+      isNull,
+    );
+    expect(classifyUnsupported('#0      _ProcessUtils._exit'), isNull);
   });
 }

@@ -29,9 +29,18 @@ void main(List<String> args) {
   if (!io.procedures.any((procedure) => procedure.name.text == '_setupHooks')) {
     throw StateError('Missing retained dart:io hook _setupHooks');
   }
-  final config = io.classes.singleWhere((c) => c.name == '_EmbedderConfig');
-  if (!config.fields.any((field) => field.name.text == '_mayExit')) {
-    throw StateError('Missing retained dart:io field _EmbedderConfig._mayExit');
+  // Uri.base comes from dart:io's own closure (launcher embedder.cc).
+  if (!io.procedures.any(
+    (procedure) => procedure.name.text == '_getUriBaseClosure',
+  )) {
+    throw StateError('Missing retained dart:io hook _getUriBaseClosure');
+  }
+  // Platform.script (DartIoSettings.script_uri).
+  final platform = io.classes.singleWhere((c) => c.name == '_Platform');
+  if (!platform.procedures.any(
+    (procedure) => procedure.name.text == '_nativeScript' && procedure.isSetter,
+  )) {
+    throw StateError('Missing retained dart:io setter _Platform._nativeScript');
   }
   print('Private hooks and native references retained in AOT kernel');
 }

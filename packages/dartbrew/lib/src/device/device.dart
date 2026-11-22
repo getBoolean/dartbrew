@@ -84,6 +84,12 @@ final class RunResult {
 ///
 /// [listener] must already be bound, so a fast app cannot miss it. Each
 /// accepted output record's text goes to [onOutput] as it arrives.
+///
+/// When the app connects, [input] is called once for the program's stdin,
+/// such as the terminal's. Its bytes go to the app over the connection; when
+/// it ends, or cannot be opened, the host closes its sending side, which the
+/// app reads as the end of stdin. Reading it stops when the run ends.
+/// Without [input] the host sends nothing and keeps its side open.
 /// Connections from peers [RunDevice.acceptsPeer] rejects are closed without
 /// affecting the run, and connections after the first accepted one are
 /// refused. The listener is left open for the caller to close, and [device]
@@ -98,6 +104,7 @@ Future<RunResult> runOnDevice({
   required ServerSocket listener,
   RunDeadlines deadlines = const RunDeadlines(),
   void Function(String text)? onOutput,
+  Stream<List<int>> Function()? input,
 }) async {
   final accumulator = VerdictAccumulator(identity);
   final parser = RuntimeLineParser();
@@ -114,6 +121,7 @@ Future<RunResult> runOnDevice({
   }
 
   Socket? connection;
+  StreamSubscription<List<int>>? forwarding;
   Timer? idle;
   StreamSubscription<List<int>>? journal;
   Timer? journalSilent;
@@ -145,6 +153,27 @@ Future<RunResult> runOnDevice({
       onError: (Object _) => end(StreamEnd.closed),
       cancelOnError: true,
     );
+    if (input == null) return;
+    void endInput() {
+      if (!ended.isCompleted) socket.close().ignore();
+    }
+
+    // A failed write (the console dropped off Wi-Fi) also ends the reading
+    // side, which reports the lost connection; it must not surface here.
+    socket.done.ignore();
+    try {
+      forwarding = input().listen(
+        (chunk) {
+          if (!ended.isCompleted) socket.add(chunk);
+        },
+        onDone: endInput,
+        onError: (Object _) => endInput(),
+        cancelOnError: true,
+      );
+    } on Exception {
+      // This process has no usable stdin: the program reads none.
+      endInput();
+    }
   }, onError: (Object _) {});
 
   void readJournal(JournalingDevice device) {
@@ -211,6 +240,7 @@ Future<RunResult> runOnDevice({
     idle?.cancel();
     journalSilent?.cancel();
     await journal?.cancel();
+    await forwarding?.cancel();
     await accepting.cancel();
     connection?.destroy();
   }
