@@ -27,7 +27,7 @@ Future<DevicesRun> runDevices(
   final runner = CommandRunner<int>('dartbrew', 'test')
     ..addCommand(
       devicesCommand(
-        transportFor: (_) => client,
+        transport: () => client,
         azaharHost: AzaharHost(
           environment: environment,
           operatingSystem: Platform.operatingSystem,
@@ -81,7 +81,7 @@ void main() {
 
     final r = await runDevices(
       loopbackClient(port: console.port, replyPort: replyPort),
-      ['--wait', '0.5'],
+      ['--target', 'ctr', '--wait', '0.5'],
     );
 
     expect(r.code, 0);
@@ -153,6 +153,13 @@ void main() {
 
     expect(r.code, 0);
     expect(r.out, contains('azahar   ${azahar.path}'));
+  });
+
+  test('an unknown --target is a usage error', () async {
+    await expectLater(
+      runDevices(loopbackClient(port: 1), ['--target', 'ntr']),
+      throwsA(isA<UsageException>()),
+    );
   });
 
   test('a non-numeric --wait is a usage error', () async {

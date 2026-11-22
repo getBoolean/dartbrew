@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dartbrew/src/device/run_identity.dart';
 import 'package:dartbrew/src/device/stream.dart';
 import 'package:dartbrew/src/device/verdict.dart';
+import 'package:dartbrew/src/targets/ctr/pipeline.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
@@ -48,6 +50,18 @@ List<Case> _loadVectors() {
   ];
 }
 
+/// The run identity a vector's `identity` object describes.
+RunIdentity runIdentityFrom(Map<String, Object?> json) => RunIdentity(
+  schema: json['schema']! as int,
+  runId: json['run_id']! as String,
+  fixture: json['fixture']! as String,
+  mode: BuildMode.values.byName(json['mode']! as String),
+  compatibility: json['compatibility']! as String,
+  artifactSha256: json['artifact_sha256']! as String,
+  buildId: json['build_id']! as String,
+  environment: RunEnvironment.values.byName(json['environment']! as String),
+);
+
 List<int> journalBytes(List<String> lines) => utf8.encode(lines.join('\n'));
 
 Verdict verdictOf(
@@ -56,7 +70,7 @@ Verdict verdictOf(
   Observation? observation,
 ]) {
   final parser = RuntimeLineParser();
-  final accumulator = VerdictAccumulator(identity);
+  final accumulator = VerdictAccumulator(runIdentityFrom(identity));
   for (final chunk in chunks) {
     parser.feed(chunk).forEach(accumulator.add);
   }
@@ -125,7 +139,7 @@ void main() {
     final older = {...identity, 'run_id': '0' * 32};
 
     test('before the current begin are ignored', () {
-      final accumulator = VerdictAccumulator(identity);
+      final accumulator = VerdictAccumulator(runIdentityFrom(identity));
       final printed = printedFrom(accumulator, [
         line({...older, 'event': 'begin'}),
         line({...record(older, 'output'), 'text': 'old'}),
@@ -136,7 +150,7 @@ void main() {
     });
 
     test('after the current begin make the verdict incomplete', () {
-      final accumulator = VerdictAccumulator(identity);
+      final accumulator = VerdictAccumulator(runIdentityFrom(identity));
       final printed = printedFrom(accumulator, [
         lines[0],
         line({...record(older, 'output'), 'text': 'old'}),
@@ -151,7 +165,9 @@ void main() {
 
   group('parser', () {
     test('output text is offered as each record completes', () {
-      final accumulator = VerdictAccumulator(vectors.first.identity);
+      final accumulator = VerdictAccumulator(
+        runIdentityFrom(vectors.first.identity),
+      );
       final parser = RuntimeLineParser();
       final bytes = utf8.encode('${vectors.first.lines.join('\n')}\n');
       final printed = <String>[];
@@ -253,7 +269,9 @@ void main() {
     });
 
     test('an empty journal is a lost connection', () {
-      final verdict = VerdictAccumulator(vectors.first.identity).finish();
+      final verdict = VerdictAccumulator(
+        runIdentityFrom(vectors.first.identity),
+      ).finish();
       expect(exitFor(verdict, StreamEnd.closed).message, 'lost connection');
     });
   });

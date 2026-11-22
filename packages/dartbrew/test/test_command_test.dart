@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
@@ -67,11 +69,14 @@ Future<_Result> _test(
   FakeConsole? console,
   ProcessStarter start = startBuildStub,
   String command = 'test',
+  StringBuffer? out,
+  Stream<Object?> Function()? interrupts,
+  Future<void> Function(int exitCode)? exitProcess,
 }) async {
   final sdk = ctrBuildSdk();
-  final out = StringBuffer();
+  out ??= StringBuffer();
   final err = StringBuffer();
-  NetloaderClient transport(_) => NetloaderClient(
+  NetloaderClient transport() => NetloaderClient(
     port: console?.port ?? 1,
     receiveAddress: InternetAddress.loopbackIPv4,
     broadcastAddress: InternetAddress.loopbackIPv4,
@@ -81,9 +86,11 @@ Future<_Result> _test(
     ..addCommand(
       testCommand(
         start: start,
-        transportFor: transport,
+        transport: transport,
         listenAddress: InternetAddress.loopbackIPv4,
         deadlines: _deadlines,
+        interrupts: interrupts,
+        exitProcess: exitProcess ?? (_) => fail('exitProcess called'),
         out: out,
         err: err,
       ),
@@ -91,7 +98,7 @@ Future<_Result> _test(
     ..addCommand(
       runCommand(
         start: start,
-        transportFor: transport,
+        transport: transport,
         listenAddress: InternetAddress.loopbackIPv4,
         deadlines: _deadlines,
         out: out,
@@ -269,6 +276,120 @@ void main() {
     );
     expect(lines[1], startsWith('{"type":"allSuites","count":1'));
     expect(lines.last, startsWith('{"type":"done","success":true'));
+  });
+
+  group('--reporter json ends with done', () {
+    Map<String, Object?> lastEvent(String out) =>
+        jsonDecode(const LineSplitter().convert(out).last)
+            as Map<String, Object?>;
+
+    test('when a test fails', () async {
+      final project = _project({'test/net_test.dart': _testFile});
+      final console = await _console(RecordedStream.unsupportedSocket());
+      final r = await _test(project, ['-r', 'json'], console: console);
+
+      expect(r.code, 1);
+      expect(lastEvent(r.out), containsPair('type', 'done'));
+      expect(lastEvent(r.out), containsPair('success', false));
+    });
+
+    test('when the device drops mid-run', () async {
+      final project = _project({'test/a_test.dart': _testFile});
+      final stream = RecordedStream();
+      final suite = stream.suite('test/a_test.dart');
+      stream
+        ..plan(suite, ['one', 'two'])
+        ..start(suite, 'one');
+      final console = await FakeConsole.start(
+        script: (app) async {
+          app.begin();
+          stream.lines.forEach(app.output);
+          await app.close();
+        },
+      );
+      addTearDown(console.close);
+      final r = await _test(project, ['-r', 'json'], console: console);
+
+      expect(r.code, 1);
+      expect(lastEvent(r.out), containsPair('type', 'done'));
+      expect(lastEvent(r.out), containsPair('success', false));
+    });
+
+    test(
+      'when the app cannot be sent, keeping the message and exit code',
+      () async {
+        final project = _project({'test/a_test.dart': _testFile});
+        final r = await _test(project, ['-r', 'json']);
+
+        expect(r.code, 1);
+        expect(r.err, contains('Could not connect to the netloader'));
+        expect(lastEvent(r.out), {
+          'type': 'done',
+          'success': false,
+          'time': isA<int>(),
+        });
+      },
+    );
+
+    test('when the build fails', () async {
+      final project = _project({'test/a_test.dart': _testFile});
+      final out = StringBuffer();
+      await expectLater(
+        _test(
+          project,
+          ['-r', 'json'],
+          start: _failingKernelFor('dartbrew_test.dart'),
+          out: out,
+        ),
+        throwsA(isA<StageFailure>()),
+      );
+      expect(lastEvent('$out'), containsPair('type', 'done'));
+      expect(lastEvent('$out'), containsPair('success', false));
+    });
+
+    test('when the user interrupts the run, then exits 130', () async {
+      final project = _project({'test/a_test.dart': _testFile});
+      final interrupts = StreamController<Object?>();
+      final stream = RecordedStream();
+      final suite = stream.suite('test/a_test.dart');
+      stream
+        ..plan(suite, ['one', 'two'])
+        ..start(suite, 'one');
+      final console = await FakeConsole.start(
+        script: (app) async {
+          app.begin();
+          stream.lines.forEach(app.output);
+          await app.socket.flush();
+          interrupts.add(null);
+        },
+      );
+      addTearDown(console.close);
+      final exits = <int>[];
+      final r = await _test(
+        project,
+        ['-r', 'json'],
+        console: console,
+        interrupts: () => interrupts.stream,
+        exitProcess: (code) async => exits.add(code),
+      );
+
+      expect(exits, [130]);
+      final done = [
+        for (final line in const LineSplitter().convert(r.out))
+          if (line.startsWith('{"type":"done"')) line,
+      ];
+      expect(done, hasLength(1));
+      expect(lastEvent(r.out), containsPair('type', 'done'));
+      expect(lastEvent(r.out), containsPair('success', false));
+    });
+
+    test('compact output gains nothing when the app cannot be sent', () async {
+      final project = _project({'test/a_test.dart': _testFile});
+      final r = await _test(project, []);
+
+      expect(r.code, 1);
+      expect(r.out, isEmpty);
+    });
   });
 
   test('a syntax error in one of three files is a load error; the other two '

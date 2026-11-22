@@ -1,4 +1,5 @@
-import 'package:dartbrew/src/device/stream.dart';
+import 'run_identity.dart';
+import 'stream.dart';
 
 /// What the app reported about a run.
 enum Outcome { pass, fail, incomplete }
@@ -40,25 +41,14 @@ final class Verdict {
 /// The launcher contract schemas a `begin` record may carry.
 const supportedSchemas = [1, 2];
 
-const _identityKeys = [
-  'schema',
-  'run_id',
-  'fixture',
-  'mode',
-  'compatibility',
-  'artifact_sha256',
-  'build_id',
-  'environment',
-];
-
 /// Computes the verdict of one run from its records, as they arrive.
 ///
 /// After the first rule violation later records are ignored.
 final class VerdictAccumulator {
-  /// [expected] is the identity of the run the host started (`run.json`).
+  /// [expected] is the identity of the run the host started.
   VerdictAccumulator(this.expected);
 
-  final Map<String, Object?> expected;
+  final RunIdentity expected;
   final _output = <String>[];
   var _active = false;
   String? _cleanup;
@@ -86,14 +76,14 @@ final class VerdictAccumulator {
       return null;
     }
     final record = line.fields;
-    if (record['run_id'] != expected['run_id']) {
+    if (record['run_id'] != expected.runId) {
       if (_active) throw const _Violation('interleaved run');
       return null;
     }
     if (_terminal != null) throw const _Violation('record after terminal');
     final event = record['event'];
     if (event == 'begin') {
-      if (_active || _identityKeys.any((k) => record[k] != expected[k])) {
+      if (_active || !expected.matchesBegin(record)) {
         throw const _Violation('duplicate begin or identity mismatch');
       }
       if (!supportedSchemas.contains(record['schema'])) {

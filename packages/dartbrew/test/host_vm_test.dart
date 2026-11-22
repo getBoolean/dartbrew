@@ -8,11 +8,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 
+import 'package:dartbrew/src/device/run_identity.dart';
 import 'package:dartbrew/src/device/stream.dart';
 import 'package:dartbrew/src/device/verdict.dart';
-import 'package:dartbrew/src/targets/ctr/package.dart';
+import 'package:dartbrew/src/targets/ctr/pipeline.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
@@ -53,18 +53,18 @@ Future<({Verdict verdict, int exitCode})> runProgram(
       ]).timeout(_compileTimeout);
   expect(compile.exitCode, 0, reason: '${compile.stdout}${compile.stderr}');
 
-  final identity = <String, Object>{
-    'schema': 1,
-    'run_id': _randomRunId(),
-    'fixture': 'async',
-    'mode': 'jit',
-    'compatibility': 'a' * 64,
-    'artifact_sha256': 'a' * 64,
-    'build_id': 'a' * 64,
-    'environment': 'host',
-  };
+  final identity = RunIdentity(
+    schema: 1,
+    runId: newRunId(),
+    fixture: 'async',
+    mode: BuildMode.jit,
+    compatibility: 'a' * 64,
+    artifactSha256: 'a' * 64,
+    buildId: 'a' * 64,
+    environment: RunEnvironment.host,
+  );
   final config = File(p.join(directory.path, 'run.cfg'))
-    ..writeAsStringSync(runConfig(identity));
+    ..writeAsStringSync(identity.runConfig());
   final journal = File(p.join(directory.path, 'journal.log'));
 
   final process = await Process.start(
@@ -113,14 +113,7 @@ Future<({Verdict verdict, int exitCode})> runProgram(
   }
 }
 
-String _randomRunId() {
-  final random = Random.secure();
-  return [
-    for (var i = 0; i < 16; i++) random.nextInt(256).toRadixString(16),
-  ].map((byte) => byte.padLeft(2, '0')).join();
-}
-
-Verdict _verdictOf(Map<String, Object> identity, List<int> journal) {
+Verdict _verdictOf(RunIdentity identity, List<int> journal) {
   final parser = RuntimeLineParser();
   final accumulator = VerdictAccumulator(identity);
   [...parser.feed(journal), ...parser.close()].forEach(accumulator.add);

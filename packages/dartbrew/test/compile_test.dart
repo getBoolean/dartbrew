@@ -484,6 +484,16 @@ void main() {
       expect(fixtureFor(project.root, project.entry), 'quoted_name');
     });
 
+    test('reads the name of a flow-style pubspec', () {
+      final project = _project(pubspec: '{version: 1.0.0, name: flow_name}\n');
+      expect(fixtureFor(project.root, project.entry), 'flow_name');
+    });
+
+    test('falls back to the entry name for a pubspec that is not YAML', () {
+      final project = _project(pubspec: 'name: [broken\n');
+      expect(fixtureFor(project.root, project.entry), 'main');
+    });
+
     test('falls back to the entry name, reduced to the token rule', () {
       final project = _project();
       expect(

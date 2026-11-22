@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:dartbrew/src/errors.dart';
 import 'package:dartbrew/src/targets/ctr/netloader.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
@@ -49,7 +50,7 @@ void main() {
           replyPort: blocker.port,
         ).discover(const Duration(milliseconds: 300)).toList(),
         throwsA(
-          isA<NetloaderException>().having(
+          isA<DartbrewException>().having(
             (e) => e.message,
             'message',
             contains('UDP port ${blocker.port}'),
@@ -142,7 +143,7 @@ void main() {
             port: netloader.port,
           ).upload(InternetAddress.loopbackIPv4, app([1, 2, 3])),
           throwsA(
-            isA<NetloaderException>().having(
+            isA<DartbrewException>().having(
               (e) => e.message,
               'message',
               contains('code $code'),
@@ -165,7 +166,7 @@ void main() {
           port: netloader.port,
         ).upload(InternetAddress.loopbackIPv4, app(bytes)),
         throwsA(
-          isA<NetloaderException>().having(
+          isA<DartbrewException>().having(
             (e) => e.message,
             'message',
             contains('Lost the connection'),
@@ -198,7 +199,7 @@ void main() {
       await expectLater(
         client.upload(InternetAddress.loopbackIPv4, app([1, 2, 3])),
         throwsA(
-          isA<NetloaderException>().having(
+          isA<DartbrewException>().having(
             (e) => e.message,
             'message',
             contains('Lost the connection'),
@@ -214,7 +215,7 @@ void main() {
           port: await freeTcpPort(),
         ).upload(InternetAddress.loopbackIPv4, app([1])),
         throwsA(
-          isA<NetloaderException>().having(
+          isA<DartbrewException>().having(
             (e) => e.message,
             'message',
             contains('127.0.0.1'),
@@ -227,7 +228,7 @@ void main() {
   test('argv over the limit is rejected before connecting', () {
     expect(
       () => encodeArgv(['x' * maxArgvLength]),
-      throwsA(isA<NetloaderException>()),
+      throwsA(isA<DartbrewException>()),
     );
     expect(encodeArgv(['a', 'bc']), [97, 0, 98, 99, 0]);
   });
@@ -387,7 +388,7 @@ final class FakeNetloader {
       if (_behavior.secondAck != 0) return;
 
       final argv = utf8.decode((await take(await int32()))!);
-      got.argv = argv.split(' ')..removeLast();
+      got.argv = argv.split('\x00')..removeLast();
       got.closedByHost = !await input.moveNext();
       _done.complete(got);
     } finally {

@@ -4,17 +4,12 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../process.dart';
-import '../targets/ctr/package.dart';
 import 'device.dart';
+import 'run_identity.dart';
 
 /// The launcher's cfg file and journal names on the SD card.
 const _configName = 'ctr-runtime-run.cfg';
 const _journalName = 'ctr-runtime.log';
-
-/// The schema-2 `ctr-runtime-run.cfg` text for [identity] that tells the
-/// launcher to connect to `127.0.0.1:<hostPort>`.
-String azaharRunConfig(Map<String, Object> identity, int hostPort) =>
-    '${runConfig(identity)}host=127.0.0.1:$hostPort\n';
 
 /// Azahar at [executable], with its emulated SD card at [sdmc].
 ///
@@ -47,7 +42,7 @@ final class AzaharDevice implements JournalingDevice {
   });
 
   @override
-  String get environment => 'azahar';
+  RunEnvironment get environment => RunEnvironment.azahar;
 
   @override
   bool acceptsPeer(InternetAddress address) => address.isLoopback;
@@ -55,14 +50,16 @@ final class AzaharDevice implements JournalingDevice {
   File get _journalFile => File(p.join(sdmc, _journalName));
 
   @override
-  Future<void> launch(
-    File app,
-    Map<String, Object> identity,
-    int hostPort,
-  ) async {
+  Future<void> launch(File app, RunIdentity identity, int hostPort) async {
+    // The launcher connects back to the host listener over Azahar's host
+    // sockets, so on loopback.
     File(p.join(sdmc, _configName))
       ..parent.createSync(recursive: true)
-      ..writeAsStringSync(azaharRunConfig(identity, hostPort));
+      ..writeAsStringSync(
+        identity.runConfig(
+          host: (address: InternetAddress.loopbackIPv4, port: hostPort),
+        ),
+      );
     final journal = _journalFile;
     _journalStart = journal.existsSync() ? journal.lengthSync() : 0;
     final process = await start(executable, [

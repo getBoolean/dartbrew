@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
+import 'package:yaml/yaml.dart';
 
 import '../../process.dart';
 import '../../sdk.dart';
@@ -30,21 +31,28 @@ final fixturePattern = RegExp('^[A-Za-z0-9_-]{1,$fixtureMaxLength}\$');
 /// or the entry file's base name when there is no pubspec name, reduced to
 /// [fixturePattern].
 String fixtureFor(String project, String entry) {
-  final pubspec = File(p.join(project, 'pubspec.yaml'));
-  final name = pubspec.existsSync()
-      ? RegExp(
-          r'''^name:[ \t]*['"]?([^\s'"#]+)''',
-          multiLine: true,
-        ).firstMatch(pubspec.readAsStringSync())?.group(1)
-      : null;
-  var token = (name ?? p.basenameWithoutExtension(entry)).replaceAll(
-    RegExp(r'[^A-Za-z0-9_-]'),
-    '_',
-  );
+  var token = (_pubspecName(project) ?? p.basenameWithoutExtension(entry))
+      .replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
   if (token.length > fixtureMaxLength) {
     token = token.substring(0, fixtureMaxLength);
   }
   return token.isEmpty ? 'app' : token;
+}
+
+/// The string `name` of [project]'s `pubspec.yaml`, or null when it has
+/// none. A pubspec that is not valid YAML also gives null; the build's
+/// `packages` stage reports it.
+String? _pubspecName(String project) {
+  final pubspec = File(p.join(project, 'pubspec.yaml'));
+  if (!pubspec.existsSync()) return null;
+  try {
+    return switch (loadYaml(pubspec.readAsStringSync())) {
+      {'name': final String name} => name,
+      _ => null,
+    };
+  } on YamlException {
+    return null;
+  }
 }
 
 /// The kernel compiler arguments that compile [entry] to [output] for
@@ -147,7 +155,6 @@ Future<CtrBuild> buildCtrApplication({
   required File application,
   bool offline = false,
   ProcessStarter start = startProcess,
-  IOSink? progress,
   StringSink? warnings,
 }) async {
   final smdh = projectSmdh(
@@ -155,7 +162,7 @@ Future<CtrBuild> buildCtrApplication({
     fallbackTitle: p.basenameWithoutExtension(entry),
     warnings: warnings ?? stderr,
   );
-  final run = StageRunner(sdk, work, start: start, progress: progress);
+  final run = StageRunner(sdk, work, start: start);
   final aot = mode == BuildMode.aot;
 
   final packageConfig = File(p.join(project, '.dart_tool/package_config.json'));

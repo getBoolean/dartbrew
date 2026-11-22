@@ -1,37 +1,52 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:path/path.dart' as p;
 
 import '../device/device.dart';
+import '../device/transport.dart';
+import '../errors.dart';
 import '../paths.dart';
 import '../process.dart';
 import '../stage_runner.dart';
 import '../targets/ctr/azahar.dart';
-import '../targets/ctr/pipeline.dart' show fixtureFor, fixtureMaxLength;
+import '../targets/ctr/netloader.dart';
+import '../targets/ctr/pipeline.dart';
+import '../targets/ctr/test_entrypoint.dart';
 import '../test_runner/reporter.dart';
-import 'devices.dart';
 import 'run.dart';
+
+/// The exit code of a `test --reporter json` run the user interrupted:
+/// 128 + SIGINT, as shells report a process stopped with Ctrl-C.
+const interruptedExitCode = 130;
 
 /// The `test` command, ready for `CommandRunner.addCommand`.
 ///
-/// See [DeviceRunner] for [start], [transportFor], [listenAddress],
-/// [deadlines], [settle], [azaharHost] and [input]. The report goes to [out]; build progress,
-/// prompts and warnings go to [err].
+/// See [DeviceRunner] for [start], [transport], [listenAddress],
+/// [deadlines], [settle], [azaharHost] and [input]. The report goes to
+/// [out]; build progress, prompts and warnings go to [err].
+///
+/// With `--reporter json`, each event of [interrupts] (such as Ctrl-C)
+/// ends the report with its `done` event and then calls [exitProcess] with
+/// [interruptedExitCode]; null [interrupts] watches nothing. [exitProcess]
+/// defaults to flushing standard output and exiting.
 Command<int> testCommand({
   ProcessStarter start = startProcess,
-  TransportForTarget transportFor = defaultTransportFor,
+  DeviceTransport Function() transport = NetloaderClient.new,
   InternetAddress? listenAddress,
   RunDeadlines deadlines = const RunDeadlines(),
   Duration settle = const Duration(seconds: 1),
   AzaharHost? azaharHost,
   Stream<List<int>> Function()? input,
+  Stream<Object?> Function()? interrupts,
+  Future<void> Function(int exitCode) exitProcess = _exitProcess,
   StringSink? out,
   StringSink? err,
 }) => _TestCommand(
   DeviceRunner(
     start: start,
-    transportFor: transportFor,
+    transport: transport,
     listenAddress: listenAddress,
     deadlines: deadlines,
     settle: settle,
@@ -39,17 +54,33 @@ Command<int> testCommand({
     input: input,
   ),
   start,
+  interrupts,
+  exitProcess,
   out ?? stdout,
   err ?? stderr,
 );
 
+Future<void> _exitProcess(int exitCode) async {
+  await stdout.flush();
+  exit(exitCode);
+}
+
 class _TestCommand extends Command<int> {
   final DeviceRunner _runner;
   final ProcessStarter _start;
+  final Stream<Object?> Function()? _interrupts;
+  final Future<void> Function(int exitCode) _exitProcess;
   final StringSink _out;
   final StringSink _err;
 
-  _TestCommand(this._runner, this._start, this._out, this._err) {
+  _TestCommand(
+    this._runner,
+    this._start,
+    this._interrupts,
+    this._exitProcess,
+    this._out,
+    this._err,
+  ) {
     addDeviceRunOptions(argParser);
     argParser
       ..addMultiOption(
@@ -106,7 +137,7 @@ class _TestCommand extends Command<int> {
       }
     }
     final project = settings.project;
-    var files = _selectTests(project, args.rest);
+    final files = _selectTests(project, args.rest);
     if (files.isEmpty) {
       _err.writeln(
         args.rest.isEmpty
@@ -116,25 +147,54 @@ class _TestCommand extends Command<int> {
       return noTestsRanExitCode;
     }
 
-    final target = settings.target;
-    if (target.testEntrypointWarning(project) case final warning?) {
+    if (_testEntrypointWarning(project) case final warning?) {
       _err.writeln(warning);
     }
 
+    final json = args.option('reporter') == 'json';
     final session = TestSession(
-      args.option('reporter') == 'json'
-          ? JsonRenderer(_out, _err, pid: pid)
-          : CompactRenderer(_out),
+      json ? JsonRenderer(_out, _err, pid: pid) : CompactRenderer(_out),
     )..begin(files.length);
+    final interrupted = json
+        ? _interrupts?.call().listen((_) async {
+            session.stop();
+            await _exitProcess(interruptedExitCode);
+          })
+        : null;
+    try {
+      return await _runTests(
+        settings,
+        session,
+        files,
+        names: names,
+        plainNames: args.multiOption('plain-name'),
+      );
+    } finally {
+      session.stop();
+      await interrupted?.cancel();
+    }
+  }
 
+  /// Builds and runs [files] on the device, reporting to [session], and
+  /// returns the exit code. A file that fails to compile on its own is
+  /// reported as a load error and the rest run without it.
+  Future<int> _runTests(
+    DeviceRunSettings settings,
+    TestSession session,
+    List<String> selected, {
+    required List<String> names,
+    required List<String> plainNames,
+  }) async {
+    final project = settings.project;
+    var files = selected;
     DeviceRun run;
     var checked = false;
     while (true) {
-      final entry = target.writeTestEntrypoint(
+      final entry = writeTestEntrypoint(
         project: project,
         testFiles: files,
         names: names,
-        plainNames: args.multiOption('plain-name'),
+        plainNames: plainNames,
         firstId: session.nextId,
       );
       try {
@@ -147,7 +207,7 @@ class _TestCommand extends Command<int> {
           buildDirectory: 'test',
         );
         break;
-      } on RunAbort catch (error) {
+      } on DartbrewException catch (error) {
         _err.writeln(error.message);
         return error.exitCode;
       } on StageFailure catch (error) {
@@ -242,7 +302,7 @@ class _TestCommand extends Command<int> {
       try {
         await runner(
           'kernel',
-          settings.target.kernelArguments(
+          kernelArguments(
             sdk,
             mode: settings.mode,
             packageConfig: packages,
@@ -259,6 +319,17 @@ class _TestCommand extends Command<int> {
       }
     }
     return failures;
+  }
+
+  /// A warning that [project]'s resolved `test_api` may not work with the
+  /// test entrypoint, or null when it should.
+  static String? _testEntrypointWarning(String project) {
+    final testApi = resolvedTestApiVersion(project);
+    if (testApi == null || isTestedTestApi(testApi)) return null;
+    return 'Warning: this project resolves test_api $testApi, but dartbrew '
+        'test is tested with test_api $testedTestApi. If the test build '
+        'fails or results look wrong, use a test package version that '
+        'resolves test_api $testedTestApi.';
   }
 
   static String _suitePath(String project, String file) =>

@@ -3,9 +3,11 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:dartbrew/src/commands/run.dart';
-import 'package:dartbrew/src/device/azahar_device.dart';
 import 'package:dartbrew/src/device/device.dart';
+import 'package:dartbrew/src/device/run_identity.dart';
+import 'package:dartbrew/src/errors.dart';
 import 'package:dartbrew/src/targets/ctr/azahar.dart';
+import 'package:dartbrew/src/targets/ctr/pipeline.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
@@ -303,7 +305,7 @@ void main() {
       expect(
         () => locateAzahar(_host(Platform.operatingSystem, _temp().path)),
         throwsA(
-          isA<AzaharNotFound>().having(
+          isA<DartbrewException>().having(
             (e) => e.message,
             'message',
             allOf(contains('--azahar'), contains('DARTBREW_AZAHAR')),
@@ -315,18 +317,20 @@ void main() {
 
   test('the cfg is the eight schema-2 identity lines with environment=azahar '
       'then the host line', () {
-    final identity = <String, Object>{
-      'schema': 2,
-      'run_id': 'a' * 32,
-      'fixture': 'hello',
-      'mode': 'jit',
-      'compatibility': 'b' * 64,
-      'artifact_sha256': 'c' * 64,
-      'build_id': 'd' * 64,
-      'environment': 'azahar',
-    };
+    final identity = RunIdentity(
+      schema: 2,
+      runId: 'a' * 32,
+      fixture: 'hello',
+      mode: BuildMode.jit,
+      compatibility: 'b' * 64,
+      artifactSha256: 'c' * 64,
+      buildId: 'd' * 64,
+      environment: RunEnvironment.azahar,
+    );
     expect(
-      azaharRunConfig(identity, 17491),
+      identity.runConfig(
+        host: (address: InternetAddress.loopbackIPv4, port: 17491),
+      ),
       'schema=2\n'
       'run_id=${'a' * 32}\n'
       'fixture=hello\n'

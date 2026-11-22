@@ -9,7 +9,7 @@ import 'commands/doctor.dart';
 import 'commands/passthrough.dart';
 import 'commands/run.dart';
 import 'commands/test.dart';
-import 'targets/ctr/netloader.dart';
+import 'errors.dart';
 
 /// The version injected at compile time with `-DDARTBREW_VERSION=<version>`.
 const version = String.fromEnvironment(
@@ -29,7 +29,13 @@ CommandRunner<int> createRunner() {
         // The terminal's stdin becomes the app's stdin (R3). It is opened
         // only when an app connects.
         ..addCommand(runCommand(input: () => stdin))
-        ..addCommand(testCommand(input: () => stdin))
+        ..addCommand(
+          testCommand(
+            input: () => stdin,
+            // Ctrl-C still ends the report with its done event.
+            interrupts: ProcessSignal.sigint.watch,
+          ),
+        )
         ..addCommand(devicesCommand())
         ..addCommand(DoctorCommand());
   passthroughCommands().forEach(runner.addCommand);
@@ -38,8 +44,9 @@ CommandRunner<int> createRunner() {
 
 /// Runs dartbrew and returns its exit code.
 ///
-/// Usage errors exit 64, malformed input 65, file-system errors 78, and a
-/// failed child process exits with its own code (70 when it has none).
+/// Usage errors exit 64, malformed input 65, file-system errors 78, a
+/// [DartbrewException] with its own code, and a failed child process with
+/// its own code (70 when it has none).
 Future<int> runCli(List<String> arguments) async {
   if (arguments.length == 1 && arguments.single == '--version') {
     stdout.writeln(version);
@@ -61,9 +68,9 @@ Future<int> runCli(List<String> arguments) async {
   } on FileSystemException catch (error) {
     stderr.writeln(error);
     return 78;
-  } on NetloaderException catch (error) {
+  } on DartbrewException catch (error) {
     stderr.writeln(error.message);
-    return 1;
+    return error.exitCode;
   } on ProcessException catch (error) {
     stderr.writeln(error.message);
     return error.errorCode > 0 ? error.errorCode : 70;

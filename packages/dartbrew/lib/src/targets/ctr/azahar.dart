@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import '../../errors.dart';
+
 /// The parts of the host the Azahar locator reads, so tests can supply their
 /// own environment, operating system and working directory.
 final class AzaharHost {
@@ -37,16 +39,8 @@ final class AzaharHost {
       p.normalize(p.isAbsolute(path) ? path : p.join(currentDirectory, path));
 }
 
-/// Why Azahar or its emulated SD card could not be found. [message] is for
-/// the user.
-final class AzaharNotFound implements Exception {
-  final String message;
-
-  const AzaharNotFound(this.message);
-
-  @override
-  String toString() => message;
-}
+/// The exit code of a command that could not find Azahar or its SD card.
+const _notFoundExitCode = 1;
 
 /// The executable names searched for on `PATH`, per operating system.
 List<String> _pathNames(String operatingSystem) => switch (operatingSystem) {
@@ -59,7 +53,7 @@ List<String> _pathNames(String operatingSystem) => switch (operatingSystem) {
 /// `DARTBREW_AZAHAR` environment variable, then the first per-OS name found
 /// on `PATH`.
 ///
-/// Throws an [AzaharNotFound] naming `--azahar` and `DARTBREW_AZAHAR` when
+/// Throws a [DartbrewException] naming `--azahar` and `DARTBREW_AZAHAR` when
 /// none is found, or when the explicitly named file does not exist.
 String locateAzahar(AzaharHost host, {String? path}) {
   const hint =
@@ -68,13 +62,17 @@ String locateAzahar(AzaharHost host, {String? path}) {
   if (path != null) {
     final executable = host._absolute(path);
     if (File(executable).existsSync()) return executable;
-    throw AzaharNotFound('No Azahar executable at $executable (--azahar).');
+    throw DartbrewException(
+      _notFoundExitCode,
+      'No Azahar executable at $executable (--azahar).',
+    );
   }
   if (host.environment['DARTBREW_AZAHAR'] case final named?
       when named.isNotEmpty) {
     final executable = host._absolute(named);
     if (File(executable).existsSync()) return executable;
-    throw AzaharNotFound(
+    throw DartbrewException(
+      _notFoundExitCode,
       'No Azahar executable at $executable (DARTBREW_AZAHAR). $hint',
     );
   }
@@ -87,7 +85,10 @@ String locateAzahar(AzaharHost host, {String? path}) {
       if (File(candidate).existsSync()) return host._absolute(candidate);
     }
   }
-  throw AzaharNotFound('Azahar was not found on PATH. $hint');
+  throw DartbrewException(
+    _notFoundExitCode,
+    'Azahar was not found on PATH. $hint',
+  );
 }
 
 /// The Azahar executable [locateAzahar] would pick without `--azahar`, or
@@ -95,7 +96,7 @@ String locateAzahar(AzaharHost host, {String? path}) {
 String? findAzahar(AzaharHost host) {
   try {
     return locateAzahar(host);
-  } on AzaharNotFound {
+  } on DartbrewException {
     return null;
   }
 }
@@ -110,7 +111,7 @@ String? findAzahar(AzaharHost host) {
 /// points the card at its `sdmc_directory`, `qt-config.ini` first; otherwise
 /// the card is the user directory's `sdmc/`.
 ///
-/// Throws an [AzaharNotFound] when the home directory is unknown.
+/// Throws a [DartbrewException] when the home directory is unknown.
 String azaharSdmc(String executable, AzaharHost host) {
   if (host.environment['DARTBREW_AZAHAR_SDMC'] case final sdmc?
       when sdmc.isNotEmpty) {
@@ -134,7 +135,8 @@ String azaharSdmc(String executable, AzaharHost host) {
 String _defaultUserDirectory(AzaharHost host) {
   String home() =>
       host._home ??
-      (throw const AzaharNotFound(
+      (throw const DartbrewException(
+        _notFoundExitCode,
         'Could not find your home directory to locate Azahar\'s SD card. '
         'Set DARTBREW_AZAHAR_SDMC to its sdmc directory.',
       ));

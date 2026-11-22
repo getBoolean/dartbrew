@@ -27,12 +27,6 @@ final class UnsupportedArea {
   String get message => '$name is not supported on CTR';
 }
 
-/// The VM's text for a call into a native that has no resolver, in JIT
-/// (`Failed to resolve native function 'File_Open' in '_File._open'`, a
-/// fatal error) and with dynamic modules (`native function 'File_Open'
-/// (2 arguments) cannot be found`). Group 1 is the native's name.
-final unresolvedNative = RegExp(r"native function '([A-Za-z0-9_]+)'");
-
 /// The classification table, checked in order; the first match wins.
 ///
 /// Order matters: `IOService_` natives serve sockets as well as the working

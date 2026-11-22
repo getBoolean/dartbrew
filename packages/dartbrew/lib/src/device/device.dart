@@ -1,13 +1,14 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'run_identity.dart';
 import 'stream.dart';
 import 'verdict.dart';
 
 /// A device that `run` and `test` start an app on: a console or an emulator.
 abstract interface class RunDevice {
-  /// The `environment` identity value of runs on this device.
-  String get environment;
+  /// The environment of runs on this device.
+  RunEnvironment get environment;
 
   /// Whether a connection from [address] can be the app on this device.
   ///
@@ -20,7 +21,7 @@ abstract interface class RunDevice {
   ///
   /// Completes once the device has accepted the app; the connect deadline
   /// starts then.
-  Future<void> launch(File app, Map<String, Object> identity, int hostPort);
+  Future<void> launch(File app, RunIdentity identity, int hostPort);
 
   /// Releases the device after the run, for example by closing an emulator.
   Future<void> dispose();
@@ -65,12 +66,12 @@ final class RunDeadlines {
 /// The result of [runOnDevice].
 final class RunResult {
   final Verdict verdict;
-  final StreamEnd end;
 
-  /// The exit code and message for [verdict] and [end] (see [exitFor]).
+  /// The exit code and message for [verdict] and how the stream ended (see
+  /// [exitFor]).
   final RunExit exit;
 
-  const RunResult(this.verdict, this.end, this.exit);
+  const RunResult(this.verdict, this.exit);
 }
 
 /// Launches [app] on [device] and streams its records from the first
@@ -96,11 +97,11 @@ final class RunResult {
 /// is not disposed.
 ///
 /// Throws whatever [RunDevice.launch] throws, such as a
-/// `NetloaderException`.
+/// `DartbrewException` for a failed upload.
 Future<RunResult> runOnDevice({
   required RunDevice device,
   required File app,
-  required Map<String, Object> identity,
+  required RunIdentity identity,
   required ServerSocket listener,
   RunDeadlines deadlines = const RunDeadlines(),
   void Function(String text)? onOutput,
@@ -183,7 +184,7 @@ Future<RunResult> runOnDevice({
       final terminal = lines.any(
         (line) =>
             line is RuntimeRecord &&
-            line.fields['run_id'] == identity['run_id'] &&
+            line.fields['run_id'] == identity.runId &&
             line.fields['event'] == 'terminal',
       );
       if (terminal || accumulator.error != null) end(StreamEnd.closed);
@@ -229,11 +230,7 @@ Future<RunResult> runOnDevice({
     final reason = await ended.future;
     if (reason == StreamEnd.closed) feed(parser.close());
     final verdict = accumulator.finish();
-    return RunResult(
-      verdict,
-      reason,
-      exitFor(verdict, reason, port: listener.port),
-    );
+    return RunResult(verdict, exitFor(verdict, reason, port: listener.port));
   } finally {
     connect?.cancel();
     overall?.cancel();

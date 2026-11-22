@@ -44,6 +44,11 @@ abstract interface class TestRenderer {
 
   /// Called once at the end, with the run's overall result.
   void done(TestSession session, int exitCode);
+
+  /// Called once instead of [done] when the run ended without a result,
+  /// such as when the app could not be sent, the build failed or the user
+  /// interrupted the run.
+  void stopped(TestSession session);
 }
 
 /// Collects the events of one `dartbrew test` run, classifies unsupported
@@ -62,6 +67,7 @@ final class TestSession {
   var _nextId = 0;
   var _deviceDone = false;
   var _stoppedEarly = false;
+  var _ended = false;
   String? _lastText;
 
   int passed = 0;
@@ -106,8 +112,10 @@ final class TestSession {
     }
   }
 
-  /// Consumes the text of one output record from the test program.
+  /// Consumes the text of one output record from the test program. Output
+  /// that arrives after the session has ended is dropped.
   void addOutput(String text) {
+    if (_ended) return;
     for (final item in parseTestOutput(text)) {
       switch (item) {
         case TestEvent(:final fields):
@@ -121,13 +129,15 @@ final class TestSession {
 
   /// Ends the session and returns the exit code: 0 when every test passed,
   /// 1 when any failed or the run stopped early, and [noTestsRanExitCode]
-  /// when no tests ran.
+  /// when no tests ran. A session that was already stopped reports nothing
+  /// more and returns 1.
   ///
   /// [runExitCode] and [runMessage] describe how the program itself ended.
   /// When the device never reported its end, the tests it did not finish
   /// are failed with the area named by the last output when one is
   /// attributable, and with [runMessage] otherwise.
   int finish({int runExitCode = 0, String? runMessage}) {
+    if (_ended) return 1;
     if (!_deviceDone) {
       _failUnfinished(runMessage);
     } else if (runExitCode != 0) {
@@ -143,8 +153,17 @@ final class TestSession {
         : passed + skipped == 0
         ? noTestsRanExitCode
         : 0;
+    _ended = true;
     renderer.done(this, code);
     return code;
+  }
+
+  /// Ends a session whose run produced no result (see
+  /// [TestRenderer.stopped]). Does nothing once the session has ended.
+  void stop() {
+    if (_ended) return;
+    _ended = true;
+    renderer.stopped(this);
   }
 
   void _failUnfinished(String? runMessage) {
@@ -353,6 +372,10 @@ final class CompactRenderer implements TestRenderer {
     _line(session, message);
   }
 
+  /// The command has already said why the run stopped.
+  @override
+  void stopped(TestSession session) {}
+
   void _error(
     TestSession session,
     TestRecord test,
@@ -386,8 +409,10 @@ final class CompactRenderer implements TestRenderer {
 }
 
 /// The public JSON reporter protocol: one event per line on [out], with the
-/// host-added `start`, `allSuites` and `done` events. Output that is not a
-/// test event goes to [err] so [out] stays machine-readable.
+/// host-added `start`, `allSuites` and `done` events. Every report ends
+/// with `done`, which has `success: false` when the run stopped without a
+/// result. Output that is not a test event goes to [err] so [out] stays
+/// machine-readable.
 final class JsonRenderer implements TestRenderer {
   final StringSink out;
   final StringSink err;
@@ -424,6 +449,10 @@ final class JsonRenderer implements TestRenderer {
   @override
   void done(TestSession session, int exitCode) =>
       _emit(session, {'type': 'done', 'success': exitCode == 0});
+
+  @override
+  void stopped(TestSession session) =>
+      _emit(session, {'type': 'done', 'success': false});
 
   void _emit(TestSession session, Map<String, Object?> event) {
     event['time'] = session.elapsed().inMilliseconds;

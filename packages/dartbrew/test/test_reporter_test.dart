@@ -318,6 +318,46 @@ void main() {
     expect(r.out, endsWith('No tests ran.\n'));
   });
 
+  group('a stopped session', () {
+    TestSession stopped(TestRenderer renderer) {
+      final stream = RecordedStream();
+      final suite = stream.suite('test/a_test.dart');
+      stream.start(suite, 'one');
+      return TestSession(renderer, elapsed: () => Duration.zero)
+        ..begin(1)
+        ..addOutput(stream.lines.join('\n'))
+        ..stop();
+    }
+
+    test('ends the JSON report with an unsuccessful done event', () {
+      final out = StringBuffer();
+      stopped(JsonRenderer(out, StringBuffer(), pid: 42));
+      final events = [
+        for (final line in const LineSplitter().convert('$out'))
+          jsonDecode(line) as Map<String, Object?>,
+      ];
+      events.forEach(_expectProtocolEvent);
+      expect(events.last, {'type': 'done', 'success': false, 'time': 0});
+    });
+
+    test('adds nothing to the compact report', () {
+      final out = StringBuffer();
+      stopped(CompactRenderer(out));
+      expect('$out', '00:00 +0: test/a_test.dart: one\n');
+    });
+
+    test('reports nothing more, and finishing it fails', () {
+      final out = StringBuffer();
+      final session = stopped(JsonRenderer(out, StringBuffer(), pid: 42));
+      final reported = '$out';
+      session
+        ..addOutput('more output')
+        ..stop();
+      expect(session.finish(), 1);
+      expect('$out', reported);
+    });
+  });
+
   test('prints and plain output appear in the compact report', () {
     final stream = RecordedStream();
     final suite = stream.suite('test/a_test.dart');

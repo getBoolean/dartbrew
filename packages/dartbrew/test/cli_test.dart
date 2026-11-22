@@ -6,7 +6,7 @@ library;
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
-import 'package:dartbrew/src/targets/target.dart';
+import 'package:dartbrew/src/commands/target_option.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
@@ -25,7 +25,7 @@ class _TargetProbe extends Command<int> {
     addTargetOption(argParser);
   }
   @override
-  int run() => selectedTarget(argResults!).name == 'ctr' ? 0 : 1;
+  int run() => argResults!.option('target') == 'ctr' ? 0 : 1;
 }
 
 void main() {
@@ -83,6 +83,21 @@ void main() {
     expect(result.stderr, contains('Usage: dartbrew <command> [arguments]'));
   });
 
+  test(
+    'run -d with an invalid address exits 64 with usage on stderr',
+    () async {
+      final result = await invoke(['run', '-d', '300.1.1.1']);
+      expect(result.exitCode, 64);
+      expect(
+        result.stderr,
+        contains(
+          '-d must be "console", "azahar" or a console\'s IPv4 address.',
+        ),
+      );
+      expect(result.stderr, contains('Usage: dartbrew run'));
+    },
+  );
+
   test('doctor verifies a sealed SDK', () async {
     final sdk = fakeSdk(tools: {'dart': 0});
     final result = await invoke(['doctor', '--sdk', sdk.root.path]);
@@ -107,6 +122,10 @@ void main() {
 
     test('defaults to ctr', () async {
       expect(await runner().run(['probe']), 0);
+    });
+
+    test('accepts ctr', () async {
+      expect(await runner().run(['probe', '--target', 'ctr']), 0);
     });
 
     test('rejects an unknown target and lists ctr', () async {
