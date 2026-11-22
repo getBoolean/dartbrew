@@ -31,7 +31,7 @@ class StageRunner {
   final Directory work;
   final ProcessStarter start;
   final IOSink progress;
-  final _commands = <Map<String, dynamic>>[];
+  final _commands = <Map<String, Object>>[];
 
   StageRunner(
     this.sdk,

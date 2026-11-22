@@ -61,8 +61,8 @@ List<String> _stages(String output) => [
     (command as Map)['stage'] as String,
 ];
 
-Map<String, dynamic> _json(String path) =>
-    jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>;
+Map<String, Object?> _json(String path) =>
+    jsonDecode(File(path).readAsStringSync()) as Map<String, Object?>;
 
 void main() {
   test('metadata assembly has exactly the native Program fields', () {
@@ -244,6 +244,70 @@ void main() {
       },
     );
   }
+
+  group('SDK verification', () {
+    test('ignores a modified asset the build does not read', () async {
+      final sdk = ctrBuildSdk();
+      File(p.join(sdk.root.path, 'bin', 'tool')).writeAsStringSync('changed');
+      final project = _project();
+      await _compile(sdk, ['-o', project.output, project.entry]);
+      expect(
+        File(p.join(project.output, 'application.3dsx')).existsSync(),
+        isTrue,
+      );
+    });
+
+    test('names a modified asset the build reads', () async {
+      final sdk = ctrBuildSdk();
+      File(
+        p.join(sdk.root.path, 'runtime', 'aot-io.a'),
+      ).writeAsStringSync('changed');
+      final project = _project();
+      await expectLater(
+        _compile(sdk, ['-o', project.output, project.entry]),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            'SDK asset hash mismatch: runtime/aot-io.a',
+          ),
+        ),
+      );
+    });
+
+    test(
+      'an SDK manifest without io_archive exits 65 naming the key',
+      () async {
+        final sdk = ctrBuildSdk();
+        sdk.editManifest((json) {
+          final modes = (json['runtime']! as Map)['modes']! as Map;
+          for (final mode in modes.values) {
+            (mode as Map).remove('io_archive');
+          }
+        });
+        final project = _project();
+        final result = await Process.run(Platform.resolvedExecutable, [
+          File('bin/dartbrew.dart').absolute.path,
+          'compile',
+          '--sdk',
+          sdk.root.path,
+          '-o',
+          project.output,
+          project.entry,
+        ]);
+        expect(result.exitCode, 65);
+        expect(result.stderr, contains('runtime.modes.aot.io_archive'));
+        expect(
+          (result.stderr as String).toLowerCase(),
+          contains('update dartbrew'),
+        );
+        expect(Directory(project.output).existsSync(), isFalse);
+      },
+      // Starting the CLI from source in a fresh VM can exceed the default
+      // 30 s under a fully loaded parallel run.
+      timeout: const Timeout(Duration(minutes: 3)),
+    );
+  });
 
   test('compiles AOT when no mode is given', () async {
     final sdk = ctrBuildSdk();

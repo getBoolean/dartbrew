@@ -22,9 +22,10 @@ class DoctorCommand extends Command<int> {
       throw UsageException('doctor takes no arguments.', usage);
     }
     final sdk = await NativeSdk.load(sdkDirectory(args));
+    sdk.verifyAllAssets();
     stdout.writeln(
       'Verified native SDK for ${currentHost()}; '
-      '${(sdk.manifest['files'] as Map<String, dynamic>).length} assets.',
+      '${sdk.manifest.files.length} assets.',
     );
     return 0;
   }

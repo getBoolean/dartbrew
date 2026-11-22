@@ -289,10 +289,10 @@ final class DeviceRunner {
           ? InternetAddress.loopbackIPv4
           : InternetAddress.anyIPv4);
 
-  /// The SDK the latest [call] verified, or null before any call has.
+  /// The SDK the latest [call] loaded, or null before any call has.
   NativeSdk? get sdk => _sdk;
 
-  /// Verifies the SDK, builds [entry] (inside [DeviceRunSettings.project])
+  /// Loads the SDK, builds [entry] (inside [DeviceRunSettings.project])
   /// into `.dart_tool/dartbrew/<buildDirectory>/<target>/<mode>/` of the
   /// project (emptied first), binds the host listener, chooses the device,
   /// then launches and streams the app, passing each output record's text to

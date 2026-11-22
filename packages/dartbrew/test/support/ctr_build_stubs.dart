@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:dartbrew/sdk_manifest.dart';
 import 'package:path/path.dart' as p;
 
 import 'elf_fixture.dart';
@@ -67,47 +68,25 @@ Future<Process> startBuildStub(
   );
 }
 
-/// A fake SDK with stub build tools and a complete CTR `runtime` manifest.
+/// A fake SDK with stub build tools and every [fakeRuntime] file sealed.
 FakeSdk ctrBuildSdk() => fakeSdk(
-  tools: {'dart': 0, 'kernel': 0, 'snapshot': 0, 'as': 0, 'ld': 0},
+  tools: {for (final tool in SdkTool.values) tool.key: 0},
   assets: {
     for (final name in [
-      'runtime/platform.dill',
-      'runtime/layout.ld',
-      'runtime/crt0.o',
-      'runtime/aot.o',
-      'runtime/jit.o',
-      'runtime/aot.a',
-      'runtime/jit.a',
-      'runtime/aot-io.a',
-      'runtime/jit-io.a',
-      'runtime/libm.a',
-      'runtime/libctru.a',
-      'runtime/libc.a',
-      'runtime/crtend.o',
+      fakeRuntime.platform,
+      for (final mode in [fakeRuntime.aot, fakeRuntime.jit]) ...[
+        ...mode.objects,
+        mode.archive,
+        mode.ioArchive,
+      ],
+      fakeRuntime.link.layout,
+      fakeRuntime.link.math,
+      ...fakeRuntime.link.startup,
+      ...fakeRuntime.link.libraries,
+      ...fakeRuntime.link.grouped,
+      ...fakeRuntime.link.end,
       'notices/LICENSE.txt',
     ])
       name: name,
-  },
-  runtime: {
-    'platform': 'runtime/platform.dill',
-    'sdk_head': 'head',
-    'modes': {
-      for (final mode in ['aot', 'jit'])
-        mode: {
-          'compatibility': (mode == 'aot' ? 'a' : 'b') * 64,
-          'objects': ['runtime/$mode.o'],
-          'archive': 'runtime/$mode.a',
-          'io_archive': 'runtime/$mode-io.a',
-        },
-    },
-    'link': {
-      'layout': 'runtime/layout.ld',
-      'startup': ['runtime/crt0.o'],
-      'math': 'runtime/libm.a',
-      'libraries': ['runtime/libctru.a'],
-      'grouped': ['runtime/libc.a'],
-      'end': ['runtime/crtend.o'],
-    },
   },
 );

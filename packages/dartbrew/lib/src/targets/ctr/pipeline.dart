@@ -57,7 +57,7 @@ List<String> kernelArguments(
   required String entry,
 }) => [
   if (mode == BuildMode.aot) '--aot',
-  '--platform=${sdk.asset(sdk.runtime['platform'] as String)}',
+  '--platform=${sdk.asset(sdk.manifest.runtime.platform)}',
   if (packageConfig.existsSync()) '--packages=${packageConfig.path}',
   '--output=$output',
   entry,
@@ -78,7 +78,7 @@ final class CtrBuild {
   final String sdkManifestSha256;
 
   /// The runtime's `sdk_head` value from the SDK manifest.
-  final Object? sdkHead;
+  final String sdkHead;
 
   const CtrBuild({
     required this.application,
@@ -192,9 +192,12 @@ Future<CtrBuild> buildCtrApplication({
       '.incbin "application.dill"\n.section .note.GNU-stack,"",%progbits\n',
     );
   }
-  final runtime = sdk.runtime;
-  final profile = (runtime['modes'] as Map)[mode.name] as Map;
-  final compatibility = profile['compatibility'] as String;
+  final runtime = sdk.manifest.runtime;
+  final profile = switch (mode) {
+    BuildMode.aot => runtime.aot,
+    BuildMode.jit => runtime.jit,
+  };
+  final compatibility = profile.compatibility;
   final payloadHash = await fileDigest(File(aot ? assembly.path : kernel));
   final sdkHash = await fileDigest(File(p.join(sdk.root, 'sdk.json')));
   final buildId = sha256
@@ -222,15 +225,13 @@ Future<CtrBuild> buildCtrApplication({
       p.setExtension(source.path, '.o'),
     ], 'assemble-${p.basenameWithoutExtension(source.path)}');
   }
-  final link = runtime['link'] as Map;
-  List<String> assets(String key) =>
-      (link[key] as List).cast<String>().map(sdk.asset).toList();
+  final link = runtime.link;
   final elf = File(p.join(work.path, 'application.elf'));
   await run('ld', [
     '--defsym=__sync_synchronize=__sync_synchronize_cp15dmb',
     '-X',
     '-T',
-    sdk.asset(link['layout'] as String),
+    sdk.asset(link.layout),
     '-d',
     '--emit-relocs',
     '--use-blx',
@@ -240,20 +241,20 @@ Future<CtrBuild> buildCtrApplication({
     '-Map=${p.join(work.path, 'link.map')}',
     '-o',
     elf.path,
-    ...assets('startup'),
-    ...(profile['objects'] as List).cast<String>().map(sdk.asset),
+    ...link.startup.map(sdk.asset),
+    ...profile.objects.map(sdk.asset),
     p.join(work.path, 'program.o'),
     p.join(work.path, 'payload.o'),
-    sdk.asset(link['math'] as String),
+    sdk.asset(link.math),
     // The SDK's dart:io layer for CTR: the launcher calls into it, and it
     // calls the VM in the runtime archive.
-    sdk.asset(profile['io_archive'] as String),
-    sdk.asset(profile['archive'] as String),
-    ...assets('libraries'),
+    sdk.asset(profile.ioArchive),
+    sdk.asset(profile.archive),
+    ...link.libraries.map(sdk.asset),
     '--start-group',
-    ...assets('grouped'),
+    ...link.grouped.map(sdk.asset),
     '--end-group',
-    ...assets('end'),
+    ...link.end.map(sdk.asset),
   ], 'link');
   final artifact = encode3dsx(elf.readAsBytesSync(), smdh: smdh);
   application.writeAsBytesSync(artifact);
@@ -268,6 +269,6 @@ Future<CtrBuild> buildCtrApplication({
     payloadSha256: payloadHash,
     elfSha256: await fileDigest(elf),
     sdkManifestSha256: sdkHash,
-    sdkHead: runtime['sdk_head'],
+    sdkHead: runtime.sdkHead,
   );
 }

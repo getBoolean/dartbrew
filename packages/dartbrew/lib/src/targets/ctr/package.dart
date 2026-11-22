@@ -80,7 +80,7 @@ Map<String, Object> packageCtrApplication(
   );
   destination.parent.createSync(recursive: true);
   destination.writeAsBytesSync(build.artifact);
-  for (final relative in (sdk.manifest['files'] as Map).keys.cast<String>()) {
+  for (final relative in sdk.manifest.files.keys) {
     if (!relative.startsWith('notices/')) continue;
     final notice = File(p.join(destination.parent.path, relative));
     notice.parent.createSync(recursive: true);
