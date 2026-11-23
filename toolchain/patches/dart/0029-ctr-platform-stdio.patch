@@ -1,0 +1,520 @@
+Connect platform information, exit status and standard streams to the embedder.
+
+diff --git a/runtime/bin/dart_io_api_impl.cc b/runtime/bin/dart_io_api_impl.cc
+index 11114c56..f436cf5c 100644
+--- a/runtime/bin/dart_io_api_impl.cc
++++ b/runtime/bin/dart_io_api_impl.cc
+@@ -15,6 +15,9 @@
+ #endif  // defined(DART_IO_SECURE_SOCKET_DISABLED)
+ #include "bin/platform.h"
+ #include "bin/process.h"
++#if defined(DART_HOST_OS_CTR)
++#include "bin/stdio_ctr.h"
++#endif
+ #if !defined(DART_IO_SECURE_SOCKET_DISABLED)
+ #include "bin/secure_socket_filter.h"
+ #endif
+@@ -156,5 +159,19 @@ Dart_Handle SetupDartIoLibrary(const DartIoSettings& settings) {
+   return Dart_Invoke(io_lib, DartUtils::NewString("_setupHooks"), 0, nullptr);
+ }
+ 
++#if defined(DART_HOST_OS_CTR)
++void SetCtrStdio(const CtrStdio& stdio) {
++  SetCtrStdioImplementation(stdio);
++}
++
++void SetExitHook(void (*hook)(int64_t exit_code)) {
++  Process::SetExitHook(hook);
++}
++
++int GetExitCode() {
++  return Process::GlobalExitCode();
++}
++#endif  // defined(DART_HOST_OS_CTR)
++
+ }  // namespace bin
+ }  // namespace dart
+diff --git a/runtime/bin/file_ctr.cc b/runtime/bin/file_ctr.cc
+old mode 100755
+new mode 100644
+index 2d77a3d2..367a401d
+--- a/runtime/bin/file_ctr.cc
++++ b/runtime/bin/file_ctr.cc
+@@ -22,6 +22,7 @@
+ #include "bin/fdutils.h"
+ #include "bin/namespace.h"
+ #include "bin/path_ctr.h"
++#include "bin/stdio_ctr.h"
+ #include "bin/unsupported_ctr.h"
+ #include "bin/uri.h"
+ #include "platform/utils.h"
+@@ -29,20 +30,51 @@
+ // Files over newlib and libctru's devoptab, following file_linux.cc. Paths
+ // follow the CTR path model (bin/path_ctr.h). The SD card (FAT) and romfs
+ // have no links, pipes or memory mapping: those operations fail with errno
+-// naming their area (Link, Pipe, File).
++// naming their area (Link, Pipe, File). The standard descriptors belong to
++// the embedder (CtrStdio, bin/stdio_ctr.h).
+ 
+ namespace dart {
+ namespace bin {
+ 
++namespace {
++CtrStdio embedder_stdio = {};
++}  // namespace
++
++void SetCtrStdioImplementation(const CtrStdio& stdio) {
++  embedder_stdio = stdio;
++}
++
++intptr_t CtrStdinRead(uint8_t* buffer, intptr_t length) {
++  if (embedder_stdio.read == nullptr) {
++    return read(STDIN_FILENO, buffer, length);
++  }
++  return embedder_stdio.read(buffer, length);
++}
++
++bool CtrStdioWrite(intptr_t fd, const uint8_t* buffer, intptr_t length) {
++  if (embedder_stdio.write == nullptr) {
++    return write(fd, buffer, length) == length;
++  }
++  if (!embedder_stdio.write(fd, buffer, length)) {
++    errno = EIO;
++    return false;
++  }
++  return true;
++}
++
+ class FileHandle {
+  public:
+-  explicit FileHandle(int fd) : fd_(fd) {}
++  FileHandle(int fd, bool stdio) : fd_(fd), stdio_(stdio) {}
+   ~FileHandle() {}
+   int fd() const { return fd_; }
+   void set_fd(int fd) { fd_ = fd; }
++  // Whether this wraps a standard descriptor opened as stdin, stdout or
++  // stderr, whose bytes go through the embedder.
++  bool stdio() const { return stdio_; }
+ 
+  private:
+   int fd_;
++  bool stdio_;
+ 
+   DISALLOW_COPY_AND_ASSIGN(FileHandle);
+ };
+@@ -86,11 +118,21 @@ void MappedMemory::Unmap() {
+ 
+ int64_t File::Read(void* buffer, int64_t num_bytes) {
+   ASSERT(handle_->fd() >= 0);
++  if (handle_->stdio() && handle_->fd() == STDIN_FILENO) {
++    return CtrStdinRead(reinterpret_cast<uint8_t*>(buffer), num_bytes);
++  }
+   return read(handle_->fd(), buffer, num_bytes);
+ }
+ 
+ int64_t File::Write(const void* buffer, int64_t num_bytes) {
+   ASSERT(handle_->fd() >= 0);
++  if (handle_->stdio() && (handle_->fd() == STDOUT_FILENO ||
++                           handle_->fd() == STDERR_FILENO)) {
++    return CtrStdioWrite(handle_->fd(),
++                         reinterpret_cast<const uint8_t*>(buffer), num_bytes)
++               ? num_bytes
++               : -1;
++  }
+   return write(handle_->fd(), buffer, num_bytes);
+ }
+ 
+@@ -165,7 +207,7 @@ File* File::FileOpenW(const wchar_t* system_name, FileOpenMode mode) {
+ }
+ 
+ File* File::OpenFD(int fd) {
+-  return new File(new FileHandle(fd));
++  return new File(new FileHandle(fd, false));
+ }
+ 
+ File* File::Open(Namespace* namespc,
+@@ -228,7 +270,7 @@ File* File::OpenUri(Namespace* namespc,
+ }
+ 
+ File* File::OpenStdio(int fd) {
+-  return new File(new FileHandle(fd));
++  return new File(new FileHandle(fd, true));
+ }
+ 
+ bool File::Exists(Namespace* namespc, const char* name) {
+@@ -527,17 +569,7 @@ const char* File::LinkTarget(Namespace* namespc,
+ }
+ 
+ bool File::IsAbsolutePath(const char* pathname) {
+-  if (pathname == nullptr) {
+-    return false;
+-  }
+-  if (pathname[0] == '/') {
+-    return true;
+-  }
+-  // A device prefix ("sdmc:", "romfs:") before any separator.
+-  for (const char* c = pathname; *c != '\0' && *c != '/'; c++) {
+-    if (*c == ':') return true;
+-  }
+-  return false;
++  return CtrIsAbsolutePath(pathname);
+ }
+ 
+ intptr_t File::ReadLinkInto(const char* pathname,
+@@ -595,9 +627,14 @@ const char* File::StringEscapedPathSeparator() {
+   return "/";
+ }
+ 
++// The embedder's standard streams behave as files: stdin reads until its end
++// (dart:io reads it as a file stream) and stdout and stderr accept writes.
+ File::StdioHandleType File::GetStdioHandleType(int fd) {
+-  SetCtrUnsupported(CtrArea::kFile);
+-  return kTypeError;
++  if (fd < STDIN_FILENO || fd > STDERR_FILENO) {
++    errno = EBADF;
++    return kTypeError;
++  }
++  return kFile;
+ }
+ 
+ File::Identical File::AreIdentical(Namespace* namespc_1,
+diff --git a/runtime/bin/io_impl_sources.gni b/runtime/bin/io_impl_sources.gni
+index 673ef74e..a2391406 100644
+--- a/runtime/bin/io_impl_sources.gni
++++ b/runtime/bin/io_impl_sources.gni
+@@ -96,6 +96,7 @@ io_impl_sources = [
+   "stdio.cc",
+   "stdio.h",
+   "stdio_ctr.cc",
++  "stdio_ctr.h",
+   "stdio_fuchsia.cc",
+   "stdio_linux.cc",
+   "stdio_macos.cc",
+diff --git a/runtime/bin/platform_ctr.cc b/runtime/bin/platform_ctr.cc
+index cbefbd37..a2d6c7f5 100644
+--- a/runtime/bin/platform_ctr.cc
++++ b/runtime/bin/platform_ctr.cc
+@@ -7,11 +7,17 @@
+ 
+ #include "bin/platform.h"
+ 
+-#include "bin/unsupported_ctr.h"
++#include <3ds.h>
++#include <errno.h>   // NOLINT
++#include <string.h>  // NOLINT
++
++#include "bin/dartutils.h"
++#include "bin/path_ctr.h"
+ #include "platform/assert.h"
++#include "platform/utils.h"
+ 
+-// Platform queries are not yet ported to CTR. Queries with an error channel
+-// fail with errno naming the Platform area; the rest return fixed values.
++// Platform queries from the console's own services. A CTR application has
++// no environment variables and no network host name.
+ 
+ namespace dart {
+ namespace bin {
+@@ -24,13 +30,29 @@ bool Platform::Initialize(bool install_crash_handler /* = true */) {
+   return true;
+ }
+ 
++// The cores an application runs threads on without a system time limit:
++// the application core, and on New 3DS also core 2.
+ int Platform::NumberOfProcessors() {
+-  return 1;
++  bool new_3ds = false;
++  if (R_FAILED(APT_CheckNew3DS(&new_3ds))) {
++    new_3ds = false;
++  }
++  return new_3ds ? 2 : 1;
+ }
+ 
+ const char* Platform::OperatingSystemVersion() {
+-  SetCtrUnsupported(CtrArea::kPlatform);
+-  return nullptr;
++  const u32 kernel = osGetKernelVersion();
++  const u32 firmware = osGetFirmVersion();
++  char version[64];
++  Utils::SNPrint(version, sizeof(version),
++                 "Horizon kernel %lu.%lu-%lu, firmware %lu.%lu-%lu",
++                 static_cast<unsigned long>(GET_VERSION_MAJOR(kernel)),
++                 static_cast<unsigned long>(GET_VERSION_MINOR(kernel)),
++                 static_cast<unsigned long>(GET_VERSION_REVISION(kernel)),
++                 static_cast<unsigned long>(GET_VERSION_MAJOR(firmware)),
++                 static_cast<unsigned long>(GET_VERSION_MINOR(firmware)),
++                 static_cast<unsigned long>(GET_VERSION_REVISION(firmware)));
++  return DartUtils::ScopedCopyCString(version);
+ }
+ 
+ const char* Platform::LibraryPrefix() {
+@@ -41,36 +63,64 @@ const char* Platform::LibraryExtension() {
+   return "so";
+ }
+ 
++// The system language from the CFG service, as a locale name.
+ const char* Platform::LocaleName() {
+-  SetCtrUnsupported(CtrArea::kPlatform);
+-  return nullptr;
++  static const char* const kLocales[] = {
++      "ja", "en", "fr", "de", "it", "es", "zh_CN", "ko", "nl", "pt", "ru",
++      "zh_TW",
++  };
++  u8 language = 0;
++  Result result = cfguInit();
++  if (R_SUCCEEDED(result)) {
++    result = CFGU_GetSystemLanguage(&language);
++    cfguExit();
++  }
++  if (R_FAILED(result) || language >= ARRAY_SIZE(kLocales)) {
++    errno = EIO;
++    return nullptr;
++  }
++  return kLocales[language];
+ }
+ 
++// The console has no network host name; dart:io reports the platform's.
+ bool Platform::LocalHostname(char* buffer, intptr_t buffer_length) {
+-  SetCtrUnsupported(CtrArea::kPlatform);
+-  return false;
++  return Utils::SNPrint(buffer, buffer_length, "ctr") < buffer_length;
+ }
+ 
+ char** Platform::Environment(intptr_t* count) {
+-  SetCtrUnsupported(CtrArea::kPlatform);
+-  return nullptr;
++  static char* empty[] = {nullptr};
++  *count = 0;
++  return empty;
+ }
+ 
+ const char* Platform::GetExecutableName() {
+   return executable_name_;
+ }
+ 
++// The application file from argv[0], in the CTR path model ("/3ds/x.3dsx").
+ const char* Platform::ResolveExecutablePath() {
+-  return nullptr;
++  if (executable_name_ == nullptr) {
++    return nullptr;
++  }
++  char* path = DartUtils::ScopedCopyCString(executable_name_);
++  CtrDartPath(path);
++  return path;
+ }
+ 
+ intptr_t Platform::ResolveExecutablePathInto(char* result, size_t result_size) {
+-  return -1;
++  if (executable_name_ == nullptr ||
++      strlen(executable_name_) >= result_size) {
++    return -1;
++  }
++  strcpy(result, executable_name_);  // NOLINT
++  CtrDartPath(result);
++  return strlen(result);
+ }
+ 
+ void Platform::SetProcessName(const char* name) {}
+ 
+-// dart:io calls these after leaving the isolate, so they cannot throw.
++// dart:io's exit() does not come here on CTR: the embedder ends the run
++// (Process_Exit). Embedder tools that call these directly are not ported.
+ void Platform::Exit(int exit_code) {
+   FATAL("Platform::Exit is not supported on CTR (dart:io)");
+ }
+@@ -82,7 +132,7 @@ void Platform::_Exit(int exit_code) {
+ void Platform::SetCoreDumpResourceLimit(int value) {}
+ 
+ bool Platform::SetEnvironmentVariable(const char* name, const char* value) {
+-  SetCtrUnsupported(CtrArea::kPlatform);
++  errno = ENOSYS;
+   return false;
+ }
+ 
+diff --git a/runtime/bin/process.cc b/runtime/bin/process.cc
+index 46918237..004ca683 100644
+--- a/runtime/bin/process.cc
++++ b/runtime/bin/process.cc
+@@ -262,11 +262,18 @@ void FUNCTION_NAME(Process_Exit)(Dart_NativeArguments args) {
+   // Ignore result if passing invalid argument and just exit 0.
+   DartUtils::GetInt64Value(Dart_GetNativeArgument(args, 0), &status);
+   Process::RunExitHook(status);
++#if defined(DART_HOST_OS_CTR)
++  // The CTR embedder ends the run itself: its exit hook has recorded the
++  // code, and this error unwinds the isolate to the embedder without running
++  // Dart catch or finally blocks. The embedder then cleans up as after main.
++  Dart_PropagateError(Dart_NewApiError("dart:io exit() ended the program"));
++#else
+   Dart_ExitIsolate();
+   // We're not doing a full VM shutdown with Dart_Cleanup, which might block,
+   // and other VM threads may be accessing state with global destructors, so
+   // we skip global destructors by using _exit instead of exit.
+   Platform::_Exit(static_cast<int>(status));
++#endif
+ }
+ 
+ void FUNCTION_NAME(Process_SetExitCode)(Dart_NativeArguments args) {
+diff --git a/runtime/bin/stdio_ctr.cc b/runtime/bin/stdio_ctr.cc
+index 680d3f75..890a42d3 100644
+--- a/runtime/bin/stdio_ctr.cc
++++ b/runtime/bin/stdio_ctr.cc
+@@ -7,59 +7,70 @@
+ 
+ #include "bin/stdio.h"
+ 
+-#include "bin/unsupported_ctr.h"
++#include <errno.h>  // NOLINT
++
++#include "bin/stdio_ctr.h"
++
++// The standard streams are the embedder's (bin/stdio_ctr.h). They behave like
++// redirected files: there is no terminal, so terminal modes fail with ENOTTY
++// as they do for redirected streams on Linux.
+ 
+ namespace dart {
+ namespace bin {
+ 
+ bool Stdin::ReadByte(intptr_t fd, int* byte) {
+-  SetCtrUnsupported(CtrArea::kStdin);
+-  return false;
++  uint8_t value;
++  const intptr_t result = CtrStdinRead(&value, 1);
++  if (result < 0) {
++    return false;
++  }
++  *byte = result == 0 ? -1 : value;
++  return true;
+ }
+ 
+ bool Stdin::GetEchoMode(intptr_t fd, bool* enabled) {
+-  SetCtrUnsupported(CtrArea::kStdin);
++  errno = ENOTTY;
+   return false;
+ }
+ 
+ bool Stdin::SetEchoMode(intptr_t fd, bool enabled) {
+-  SetCtrUnsupported(CtrArea::kStdin);
++  errno = ENOTTY;
+   return false;
+ }
+ 
+ bool Stdin::GetEchoNewlineMode(intptr_t fd, bool* enabled) {
+-  SetCtrUnsupported(CtrArea::kStdin);
++  errno = ENOTTY;
+   return false;
+ }
+ 
+ bool Stdin::SetEchoNewlineMode(intptr_t fd, bool enabled) {
+-  SetCtrUnsupported(CtrArea::kStdin);
++  errno = ENOTTY;
+   return false;
+ }
+ 
+ bool Stdin::GetLineMode(intptr_t fd, bool* enabled) {
+-  SetCtrUnsupported(CtrArea::kStdin);
++  errno = ENOTTY;
+   return false;
+ }
+ 
+ bool Stdin::SetLineMode(intptr_t fd, bool enabled) {
+-  SetCtrUnsupported(CtrArea::kStdin);
++  errno = ENOTTY;
+   return false;
+ }
+ 
+ bool Stdin::AnsiSupported(intptr_t fd, bool* supported) {
+-  SetCtrUnsupported(CtrArea::kStdin);
+-  return false;
++  *supported = false;
++  return true;
+ }
+ 
+ bool Stdout::GetTerminalSize(intptr_t fd, int size[2]) {
+-  SetCtrUnsupported(CtrArea::kStdout);
++  errno = ENOTTY;
+   return false;
+ }
+ 
+ bool Stdout::AnsiSupported(intptr_t fd, bool* supported) {
+-  SetCtrUnsupported(CtrArea::kStdout);
+-  return false;
++  *supported = false;
++  return true;
+ }
+ 
+ }  // namespace bin
+diff --git a/runtime/bin/stdio_ctr.h b/runtime/bin/stdio_ctr.h
+new file mode 100644
+index 00000000..1438510f
+--- /dev/null
++++ b/runtime/bin/stdio_ctr.h
+@@ -0,0 +1,33 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#ifndef RUNTIME_BIN_STDIO_CTR_H_
++#define RUNTIME_BIN_STDIO_CTR_H_
++
++#include "include/bin/dart_io_api.h"
++#include "platform/globals.h"
++
++#if !defined(DART_HOST_OS_CTR)
++#error "stdio_ctr.h is only for CTR builds."
++#endif
++
++namespace dart {
++namespace bin {
++
++// The embedder's standard streams (SetCtrStdio). Without them, the standard
++// descriptors are newlib's (libctru's console).
++void SetCtrStdioImplementation(const CtrStdio& stdio);
++
++// Reads stdin: the number of bytes read, 0 at the end of input, or -1 with
++// errno set.
++intptr_t CtrStdinRead(uint8_t* buffer, intptr_t length);
++
++// Writes all of |buffer| to stdout (fd 1) or stderr (fd 2); false with errno
++// set on failure.
++bool CtrStdioWrite(intptr_t fd, const uint8_t* buffer, intptr_t length);
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // RUNTIME_BIN_STDIO_CTR_H_
+diff --git a/runtime/include/bin/dart_io_api.h b/runtime/include/bin/dart_io_api.h
+index f2bd4944..93c21537 100644
+--- a/runtime/include/bin/dart_io_api.h
++++ b/runtime/include/bin/dart_io_api.h
+@@ -101,6 +101,31 @@ struct DartIoSettings {
+ // Prepare 'dart:io' library for running.
+ Dart_Handle SetupDartIoLibrary(const DartIoSettings& settings);
+ 
++#if defined(__3DS__)
++// CTR (Nintendo 3DS) embedders own the standard streams and the end of the
++// run.
++struct CtrStdio {
++  // Takes the |length| bytes the program wrote to stdout (fd 1) or stderr
++  // (fd 2). Returns false on failure.
++  bool (*write)(intptr_t fd, const uint8_t* buffer, intptr_t length);
++  // Blocks until stdin has bytes. Returns the number read (at most |length|),
++  // 0 at the end of input, or -1 with errno set.
++  intptr_t (*read)(uint8_t* buffer, intptr_t length);
++};
++
++// Routes dart:io's stdin, stdout and stderr to |stdio|. Call before the first
++// isolate starts; without it they use newlib's standard descriptors.
++void SetCtrStdio(const CtrStdio& stdio);
++
++// Called by dart:io's exit(code) on the isolate's thread. When it returns,
++// the isolate unwinds to the embedder with an API error, without running Dart
++// catch or finally blocks; the embedder then ends the run with the code.
++void SetExitHook(void (*hook)(int64_t exit_code));
++
++// The value of dart:io's exitCode.
++int GetExitCode();
++#endif
++
+ }  // namespace bin
+ }  // namespace dart
+ 

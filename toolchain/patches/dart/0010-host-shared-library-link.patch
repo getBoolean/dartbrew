@@ -1,0 +1,17 @@
+Link the host VM shared library with its required platform dependencies.
+
+diff --git a/runtime/BUILD.gn b/runtime/BUILD.gn
+index f54e42ee..9a9717f4 100644
+--- a/runtime/BUILD.gn
++++ b/runtime/BUILD.gn
+@@ -418,7 +418,9 @@ library_for_all_configs("libdart") {
+ if (!is_ctr) {
+   shared_library("dart_jit_library") {
+     output_name = "dart_jit"
+-    ldflags = [ "-Wl,-install_name,@rpath/Dart.framework/Dart" ]
++    if (is_mac) {
++      ldflags = [ "-Wl,-install_name,@rpath/Dart.framework/Dart" ]
++    }
+     public = [ "include/dart_api.h" ]
+     deps = [ ":libdart_jit" ]
+     public_configs = [ ":dart_public_config" ]

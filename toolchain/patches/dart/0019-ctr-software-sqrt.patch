@@ -1,0 +1,155 @@
+Use software square root for ARM11 double operations.
+
+diff --git a/runtime/vm/compiler/backend/evaluator.cc b/runtime/vm/compiler/backend/evaluator.cc
+index 61e617e6..eded59f6 100644
+--- a/runtime/vm/compiler/backend/evaluator.cc
++++ b/runtime/vm/compiler/backend/evaluator.cc
+@@ -3,6 +3,7 @@
+ // BSD-style license that can be found in the LICENSE file.
+ 
+ #include "vm/compiler/backend/evaluator.h"
++#include "vm/ctr_double_helpers.h"
+ 
+ namespace dart {
+ 
+@@ -208,7 +209,11 @@ double Evaluator::EvaluateUnaryDoubleOp(const double value,
+       case Token::kNEGATE:
+         return -value;
+       case Token::kSQRT:
++#if defined(DART_HOST_OS_CTR)
++        return CtrDoubleSqrt(value);
++#else
+         return sqrt(value);
++#endif
+       case Token::kSQUARE:
+         return value * value;
+       case Token::kTRUNCATE:
+diff --git a/runtime/vm/compiler/backend/il_arm.cc b/runtime/vm/compiler/backend/il_arm.cc
+index fc870b2f..c1cd7fbb 100644
+--- a/runtime/vm/compiler/backend/il_arm.cc
++++ b/runtime/vm/compiler/backend/il_arm.cc
+@@ -5750,6 +5750,23 @@ void UnaryDoubleOpInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+     }
+     return;
+   }
++  if (TargetCPUFeatures::armv6k() && op_kind() == Token::kSQRT) {
++    const DRegister result = EvenDRegisterOf(locs()->out(0).fpu_reg());
++    const DRegister value = EvenDRegisterOf(locs()->in(0).fpu_reg());
++    // Keep the ordinary no-call locations: preserve all allocatable volatile
++    // registers and return through reserved DTMP, as with float conversions.
++    {
++      compiler::LeafRuntimeScope rt(compiler->assembler(), /*frame_size=*/0,
++                                   /*preserve_registers=*/true);
++      __ vmovd(D0, value);
++      if (!TargetCPUFeatures::hardfp_supported()) __ vmovrrd(R0, R1, D0);
++      rt.Call(kCtrDoubleSqrtRuntimeEntry, 1);
++      if (!TargetCPUFeatures::hardfp_supported()) __ vmovdrr(D0, R0, R1);
++      __ vmovd(DTMP, D0);
++    }
++    __ vmovd(result, DTMP);
++    return;
++  }
+   const DRegister result = EvenDRegisterOf(locs()->out(0).fpu_reg());
+   const DRegister value = EvenDRegisterOf(locs()->in(0).fpu_reg());
+   switch (op_kind()) {
+diff --git a/runtime/vm/ctr_double_helpers.cc b/runtime/vm/ctr_double_helpers.cc
+index 3abdbecb..54421c77 100755
+--- a/runtime/vm/ctr_double_helpers.cc
++++ b/runtime/vm/ctr_double_helpers.cc
+@@ -71,3 +71,57 @@ extern "C" void CtrFloatConvert(uint32_t* words, intptr_t narrow) {
+     __builtin_memcpy(words, &result, sizeof(result));
+   }
+ }
++
++extern "C" double CtrDoubleSqrt(double value) {
++  uint64_t bits;
++  __builtin_memcpy(&bits, &value, sizeof(bits));
++  const uint64_t sign = UINT64_C(0x8000000000000000);
++  const uint64_t fraction_mask = UINT64_C(0x000fffffffffffff);
++  const uint64_t infinity = UINT64_C(0x7ff0000000000000);
++  const uint64_t magnitude = bits & ~sign;
++  uint64_t result;
++  if (magnitude == 0 || bits == infinity) {
++    result = bits;
++  } else if (magnitude > infinity) {
++    result = bits | UINT64_C(0x0008000000000000);  // Quiet a NaN.
++  } else if ((bits & sign) != 0) {
++    result = UINT64_C(0x7ff8000000000000);
++  } else {
++    int exponent = static_cast<int>(bits >> 52) - 1023;
++    uint64_t mantissa = bits & fraction_mask;
++    if (bits < (UINT64_C(1) << 52)) {
++      exponent = -1022;
++      while (mantissa < (UINT64_C(1) << 52)) {
++        mantissa <<= 1;
++        --exponent;
++      }
++    } else {
++      mantissa |= UINT64_C(1) << 52;
++    }
++    if (exponent % 2 != 0) {
++      mantissa <<= 1;
++      --exponent;
++    }
++    // Restore sqrt(mantissa << 52), two radicand bits per step. The
++    // 106-bit radicand need not be materialized; the remainder fits 55 bits.
++    uint64_t root = 0, remainder = 0;
++    for (int pair = 52; pair >= 0; --pair) {
++      const int shift = pair * 2;
++      const uint64_t digit = shift >= 52 ? (mantissa >> (shift - 52)) & 3 : 0;
++      remainder = (remainder << 2) | digit;
++      root <<= 1;
++      const uint64_t trial = (root << 1) | 1;
++      if (remainder >= trial) {
++        remainder -= trial;
++        ++root;
++      }
++    }
++    // sqrt(N) exceeds root + 1/2 iff N-root^2 > root. An integer N
++    // cannot equal the midpoint square root^2 + root + 1/4.
++    root += remainder > root;
++    result = (static_cast<uint64_t>(exponent / 2 + 1023) << 52) |
++             (root & fraction_mask);
++  }
++  __builtin_memcpy(&value, &result, sizeof(value));
++  return value;
++}
+diff --git a/runtime/vm/ctr_double_helpers.h b/runtime/vm/ctr_double_helpers.h
+index 7f4335ee..e430207e 100755
+--- a/runtime/vm/ctr_double_helpers.h
++++ b/runtime/vm/ctr_double_helpers.h
+@@ -11,6 +11,7 @@ extern "C" double CtrDoubleAdd(double left, double right);
+ extern "C" double CtrDoubleSub(double left, double right);
+ extern "C" double CtrDoubleMul(double left, double right);
+ extern "C" double CtrDoubleDiv(double left, double right);
++extern "C" double CtrDoubleSqrt(double value);
+ 
+ // Returns -1, 0 or 1 for ordered operands; 2 means unordered (a NaN).
+ extern "C" int CtrDoubleCompare(double left, double right);
+diff --git a/runtime/vm/runtime_entry.cc b/runtime/vm/runtime_entry.cc
+index ce025c43..64603e36 100644
+--- a/runtime/vm/runtime_entry.cc
++++ b/runtime/vm/runtime_entry.cc
+@@ -5707,6 +5707,10 @@ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(CtrDoubleDiv,
+                                 /*argument_count=*/2,
+                                 static_cast<BinaryMathCFunction>(CtrDoubleDiv));
+ 
++DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(CtrDoubleSqrt,
++                                /*argument_count=*/1,
++                                static_cast<UnaryMathCFunction>(CtrDoubleSqrt));
++
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcPow,
+                                 /*argument_count=*/2,
+                                 static_cast<BinaryMathCFunction>(pow));
+diff --git a/runtime/vm/runtime_entry_list.h b/runtime/vm/runtime_entry_list.h
+index c0ccffb9..3171f52a 100644
+--- a/runtime/vm/runtime_entry_list.h
++++ b/runtime/vm/runtime_entry_list.h
+@@ -119,6 +119,7 @@ namespace dart {
+   V(double, CtrDoubleSub, double, double)                                       \
+   V(double, CtrDoubleMul, double, double)                                       \
+   V(double, CtrDoubleDiv, double, double)                                       \
++  V(double, CtrDoubleSqrt, double)                                            \
+   V(double, LibcPow, double, double)                                           \
+   V(double, DartModulo, double, double)                                        \
+   V(double, LibcFmod, double, double)                                          \

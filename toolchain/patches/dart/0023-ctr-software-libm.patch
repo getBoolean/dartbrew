@@ -1,0 +1,190 @@
+Route supported math intrinsics through the hard-float bridge.
+
+diff --git a/runtime/vm/compiler/backend/evaluator.cc b/runtime/vm/compiler/backend/evaluator.cc
+index eded59f6..0a6a1aec 100644
+--- a/runtime/vm/compiler/backend/evaluator.cc
++++ b/runtime/vm/compiler/backend/evaluator.cc
+@@ -217,11 +217,23 @@ double Evaluator::EvaluateUnaryDoubleOp(const double value,
+       case Token::kSQUARE:
+         return value * value;
+       case Token::kTRUNCATE:
++#if defined(DART_HOST_OS_CTR)
++        return CtrLibmTrunc(value);
++#else
+         return trunc(value);
++#endif
+       case Token::kFLOOR:
++#if defined(DART_HOST_OS_CTR)
++        return CtrLibmFloor(value);
++#else
+         return floor(value);
++#endif
+       case Token::kCEILING:
++#if defined(DART_HOST_OS_CTR)
++        return CtrLibmCeil(value);
++#else
+         return ceil(value);
++#endif
+       default:
+         UNREACHABLE();
+     }
+diff --git a/runtime/vm/ctr_double_helpers.cc b/runtime/vm/ctr_double_helpers.cc
+old mode 100755
+new mode 100644
+index fd95a0eb..5aa79a94
+--- a/runtime/vm/ctr_double_helpers.cc
++++ b/runtime/vm/ctr_double_helpers.cc
+@@ -2,6 +2,9 @@
+ // Use of this source code is governed by a BSD-style license in LICENSE.
+ #include "vm/ctr_double_helpers.h"
+ #include <stdint.h>
++#if !defined(__3DS__)
++#include <math.h>
++#endif
+ 
+ #if defined(__3DS__)
+ // GCC's ARM runtime helpers use the base AAPCS even in a hard-float binary.
+@@ -235,3 +238,13 @@ extern "C" double CtrDoubleModulo(double left, double right) {
+   }
+   return remainder;
+ }
++
++extern "C" double CtrDoublePow(double left, double right) {
++  double result;
++  if (CtrDoublePowSpecial(left, right, &result)) return result;
++#if defined(__3DS__)
++  return CtrLibmPow(left, right);
++#else
++  return pow(left, right);
++#endif
++}
+diff --git a/runtime/vm/ctr_double_helpers.h b/runtime/vm/ctr_double_helpers.h
+old mode 100755
+new mode 100644
+index 2f0c65e4..9a88af79
+--- a/runtime/vm/ctr_double_helpers.h
++++ b/runtime/vm/ctr_double_helpers.h
+@@ -12,6 +12,24 @@ extern "C" double CtrDoubleSub(double left, double right);
+ extern "C" double CtrDoubleMul(double left, double right);
+ extern "C" double CtrDoubleDiv(double left, double right);
+ extern "C" double CtrDoubleSqrt(double value);
++extern "C" double CtrDoublePow(double left, double right);
++
++// Hard-float adapters to the private software-math component.
++extern "C" double CtrLibmPow(double, double);
++extern "C" double CtrLibmAtan2(double, double);
++extern "C" double CtrLibmSin(double);
++extern "C" double CtrLibmCos(double);
++extern "C" double CtrLibmTan(double);
++extern "C" double CtrLibmAsin(double);
++extern "C" double CtrLibmAcos(double);
++extern "C" double CtrLibmAtan(double);
++extern "C" double CtrLibmExp(double);
++extern "C" double CtrLibmLog(double);
++extern "C" double CtrLibmFloor(double);
++extern "C" double CtrLibmCeil(double);
++extern "C" double CtrLibmTrunc(double);
++extern "C" double CtrLibmRound(double);
++
+ extern "C" double CtrDoubleRemainder(double left, double right);
+ extern "C" double CtrDoubleModulo(double left, double right);
+ 
+diff --git a/runtime/vm/runtime_entry.cc b/runtime/vm/runtime_entry.cc
+index 5ae5fe3f..d17547a8 100644
+--- a/runtime/vm/runtime_entry.cc
++++ b/runtime/vm/runtime_entry.cc
+@@ -5716,14 +5716,9 @@ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(CtrDoubleSqrt,
+                                 static_cast<UnaryMathCFunction>(CtrDoubleSqrt));
+ 
+ #if defined(DART_HOST_OS_CTR)
+-static double CtrPow(double base, double exponent) {
+-  double result;
+-  if (CtrDoublePowSpecial(base, exponent, &result)) return result;
+-  return pow(base, exponent);
+-}
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcPow,
+                                 /*argument_count=*/2,
+-                                static_cast<BinaryMathCFunction>(CtrPow));
++                                static_cast<BinaryMathCFunction>(CtrDoublePow));
+ #else
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcPow,
+                                 /*argument_count=*/2,
+@@ -5744,57 +5739,65 @@ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcFmod,
+                                 static_cast<BinaryMathCFunction>(fmod_ieee));
+ #endif
+ 
++#if defined(DART_HOST_OS_CTR)
++#define CTR_MATH_TARGET(Name, Host) CtrLibm##Name
++#else
++#define CTR_MATH_TARGET(Name, Host) Host
++#endif
++
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcAtan2,
+                                 /*argument_count=*/2,
+-                                static_cast<BinaryMathCFunction>(atan2_ieee));
++                                static_cast<BinaryMathCFunction>(CTR_MATH_TARGET(Atan2, atan2_ieee)));
+ 
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcFloor,
+                                 /*argument_count=*/1,
+-                                static_cast<UnaryMathCFunction>(floor));
++                                static_cast<UnaryMathCFunction>(CTR_MATH_TARGET(Floor, floor)));
+ 
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcCeil,
+                                 /*argument_count=*/1,
+-                                static_cast<UnaryMathCFunction>(ceil));
++                                static_cast<UnaryMathCFunction>(CTR_MATH_TARGET(Ceil, ceil)));
+ 
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcTrunc,
+                                 /*argument_count=*/1,
+-                                static_cast<UnaryMathCFunction>(trunc));
++                                static_cast<UnaryMathCFunction>(CTR_MATH_TARGET(Trunc, trunc)));
+ 
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcRound,
+                                 /*argument_count=*/1,
+-                                static_cast<UnaryMathCFunction>(round));
++                                static_cast<UnaryMathCFunction>(CTR_MATH_TARGET(Round, round)));
+ 
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcCos,
+                                 /*argument_count=*/1,
+-                                static_cast<UnaryMathCFunction>(cos));
++                                static_cast<UnaryMathCFunction>(CTR_MATH_TARGET(Cos, cos)));
+ 
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcSin,
+                                 /*argument_count=*/1,
+-                                static_cast<UnaryMathCFunction>(sin));
++                                static_cast<UnaryMathCFunction>(CTR_MATH_TARGET(Sin, sin)));
+ 
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcAsin,
+                                 /*argument_count=*/1,
+-                                static_cast<UnaryMathCFunction>(asin));
++                                static_cast<UnaryMathCFunction>(CTR_MATH_TARGET(Asin, asin)));
+ 
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcAcos,
+                                 /*argument_count=*/1,
+-                                static_cast<UnaryMathCFunction>(acos));
++                                static_cast<UnaryMathCFunction>(CTR_MATH_TARGET(Acos, acos)));
+ 
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcTan,
+                                 /*argument_count=*/1,
+-                                static_cast<UnaryMathCFunction>(tan));
++                                static_cast<UnaryMathCFunction>(CTR_MATH_TARGET(Tan, tan)));
+ 
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcAtan,
+                                 /*argument_count=*/1,
+-                                static_cast<UnaryMathCFunction>(atan));
++                                static_cast<UnaryMathCFunction>(CTR_MATH_TARGET(Atan, atan)));
+ 
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcExp,
+                                 /*argument_count=*/1,
+-                                static_cast<UnaryMathCFunction>(exp));
++                                static_cast<UnaryMathCFunction>(CTR_MATH_TARGET(Exp, exp)));
+ 
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcLog,
+                                 /*argument_count=*/1,
+-                                static_cast<UnaryMathCFunction>(log));
++                                static_cast<UnaryMathCFunction>(CTR_MATH_TARGET(Log, log)));
++
++#undef CTR_MATH_TARGET
+ 
+ DEFINE_LEAF_RUNTIME_ENTRY(MemoryMove,
+                           /*argument_count=*/3,

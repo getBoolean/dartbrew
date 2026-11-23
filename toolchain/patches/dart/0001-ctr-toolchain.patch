@@ -1,3 +1,5 @@
+Configure the ARMv6K cross toolchain and separate runtime build graphs.
+
 diff --git a/build/config/BUILDCONFIG.gn b/build/config/BUILDCONFIG.gn
 index b4f5932d..ef6d253c 100644
 --- a/build/config/BUILDCONFIG.gn
@@ -105,12 +107,33 @@ index fbce649c..446414c8 100644
      }
    }
  }
+diff --git a/build/ctr/BUILD.gn b/build/ctr/BUILD.gn
+new file mode 100644
+index 00000000..92f57d9b
+--- /dev/null
++++ b/build/ctr/BUILD.gn
+@@ -0,0 +1,15 @@
++# Executed on Linux, targeting ARM/CTR, unlike gen_snapshot_host_targeting_host.
++group("precompiler") {
++  deps = [
++    "//runtime/bin:gen_snapshot($host_toolchain)",
++    "//build/toolchain/ctr:abi_probe",
++  ]
++}
++
++group("aot_runtime") {
++  deps = [ "//runtime:libdart_aotruntime" ]
++}
++
++group("jit_runtime") {
++  deps = [ "//runtime:libdart_jit" ]
++}
 diff --git a/build/toolchain/ctr/BUILD.gn b/build/toolchain/ctr/BUILD.gn
 new file mode 100644
-index 00000000..447ff732
+index 00000000..9d1223fc
 --- /dev/null
 +++ b/build/toolchain/ctr/BUILD.gn
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,34 @@
 +# CTR uses the upstream GCC template and Linux host generators.
 +import("//build/toolchain/gcc_toolchain.gni")
 +import("ctr.gni")
@@ -145,18 +168,6 @@ index 00000000..447ff732
 +  sources = [ "probe.cc" ]
 +}
 +
-+# Executed on Linux, targeting ARM/CTR, unlike gen_snapshot_host_targeting_host.
-+group("precompiler") {
-+  deps = [ "//runtime/bin:gen_snapshot($host_toolchain)" ]
-+}
-+
-+group("aot_runtime") {
-+  deps = [ "//runtime:libdart_aotruntime" ]
-+}
-+
-+group("jit_runtime") {
-+  deps = [ "//runtime:libdart_jit" ]
-+}
 diff --git a/build/toolchain/ctr/ctr.gni b/build/toolchain/ctr/ctr.gni
 new file mode 100644
 index 00000000..1066237d
@@ -170,29 +181,8 @@ index 00000000..1066237d
 +  ctr_specs_file = ""
 +  ctr_cflags = []
 +}
-diff --git a/build/toolchain/ctr/probe.cc b/build/toolchain/ctr/probe.cc
-new file mode 100644
-index 00000000..3b1bea78
---- /dev/null
-+++ b/build/toolchain/ctr/probe.cc
-@@ -0,0 +1,15 @@
-+// Configuration evidence, not a VM runtime or numeric qualification.
-+#include <atomic>
-+static_assert(sizeof(void*) == 4);
-+static_assert(__ARM_ARCH == 6);
-+#if !defined(__ARM_ARCH_6K__) || !defined(__ARM_PCS_VFP)
-+#error "CTR requires ARMv6K hard float"
-+#endif
-+#if defined(__ARM_NEON) || defined(__ARM_FEATURE_IDIV)
-+#error "CTR cannot use NEON or hardware integer division"
-+#endif
-+thread_local volatile unsigned ctr_thread_value;
-+void ctr_abi_probe() {
-+  ++ctr_thread_value;
-+  std::atomic_thread_fence(std::memory_order_seq_cst);
-+}
 diff --git a/runtime/BUILD.gn b/runtime/BUILD.gn
-index 9da80ef6..d945aa51 100644
+index 9da80ef6..e9f80d57 100644
 --- a/runtime/BUILD.gn
 +++ b/runtime/BUILD.gn
 @@ -110,7 +110,9 @@ config("dart_precompiler_config") {
@@ -206,8 +196,30 @@ index 9da80ef6..d945aa51 100644
      defines += [ "DART_TARGET_OS_ANDROID" ]
    } else if (target_os == "fuchsia") {
      defines += [ "DART_TARGET_OS_FUCHSIA" ]
+@@ -404,12 +406,15 @@ library_for_all_configs("libdart") {
+   ]
+ }
+ 
+-shared_library("dart_jit_library") {
+-  output_name = "dart_jit"
+-  ldflags = [ "-Wl,-install_name,@rpath/Dart.framework/Dart" ]
+-  public = [ "include/dart_api.h" ]
+-  deps = [ ":libdart_jit" ]
+-  public_configs = [ ":dart_public_config" ]
++# CTR packages static runtimes; dynamic libraries require an OS loader.
++if (!is_ctr) {
++  shared_library("dart_jit_library") {
++    output_name = "dart_jit"
++    ldflags = [ "-Wl,-install_name,@rpath/Dart.framework/Dart" ]
++    public = [ "include/dart_api.h" ]
++    deps = [ ":libdart_jit" ]
++    public_configs = [ ":dart_public_config" ]
++  }
+ }
+ 
+ action("generate_version_cc_file") {
 diff --git a/runtime/platform/globals.h b/runtime/platform/globals.h
-index 4bbd9c63..4804863f 100644
+index 4bbd9c63..e6954d35 100644
 --- a/runtime/platform/globals.h
 +++ b/runtime/platform/globals.h
 @@ -105,7 +105,10 @@
@@ -237,6 +249,28 @@ index 4bbd9c63..4804863f 100644
  #define DART_TARGET_OS_ANDROID 1
  #elif defined(DART_HOST_OS_FUCHSIA)
  #define DART_TARGET_OS_FUCHSIA 1
+@@ -708,7 +714,9 @@ DART_FORCE_INLINE D bit_copy(const S& source) {
+ // Undefine math.h definition which clashes with our condition names.
+ #undef OVERFLOW
+ 
+-#if defined(DART_HOST_OS_ANDROID)
++#if defined(DART_HOST_OS_CTR)
++#define kHostOperatingSystemName "ctr"
++#elif defined(DART_HOST_OS_ANDROID)
+ #define kHostOperatingSystemName "android"
+ #elif defined(DART_HOST_OS_FUCHSIA)
+ #define kHostOperatingSystemName "fuchsia"
+@@ -762,7 +770,9 @@ DART_FORCE_INLINE D bit_copy(const S& source) {
+ // below is important, since the latter is sometimes defined when the former
+ // is, and sometimes not (e.g., ffi tests), so we need to test the former
+ // before the latter.
+-#if defined(DART_TARGET_OS_ANDROID)
++#if defined(DART_TARGET_OS_CTR)
++#define kTargetOperatingSystemName "ctr"
++#elif defined(DART_TARGET_OS_ANDROID)
+ #define kTargetOperatingSystemName "android"
+ #elif defined(DART_TARGET_OS_FUCHSIA)
+ #define kTargetOperatingSystemName "fuchsia"
 diff --git a/tools/gn.py b/tools/gn.py
 index a07ebca7..47decf49 100755
 --- a/tools/gn.py

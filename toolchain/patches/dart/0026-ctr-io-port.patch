@@ -1,0 +1,2117 @@
+Build the native dart:io layer and identify unsupported CTR operations.
+
+diff --git a/build/ctr/BUILD.gn b/build/ctr/BUILD.gn
+index 92f57d9b..4d0e7618 100644
+--- a/build/ctr/BUILD.gn
++++ b/build/ctr/BUILD.gn
+@@ -1,15 +1,18 @@
+ # Executed on Linux, targeting ARM/CTR, unlike gen_snapshot_host_targeting_host.
+ group("precompiler") {
+-  deps = [
+-    "//runtime/bin:gen_snapshot($host_toolchain)",
+-    "//build/toolchain/ctr:abi_probe",
+-  ]
++  deps = [ "//runtime/bin:gen_snapshot($host_toolchain)" ]
+ }
+ 
+ group("aot_runtime") {
+-  deps = [ "//runtime:libdart_aotruntime" ]
++  deps = [
++    "//runtime/bin/ctr:dart_io",
++    "//runtime:libdart_aotruntime",
++  ]
+ }
+ 
+ group("jit_runtime") {
+-  deps = [ "//runtime:libdart_jit" ]
++  deps = [
++    "//runtime/bin/ctr:dart_io",
++    "//runtime:libdart_jit",
++  ]
+ }
+diff --git a/runtime/bin/builtin_impl_sources.gni b/runtime/bin/builtin_impl_sources.gni
+index 8e18c0a8..7db32c66 100644
+--- a/runtime/bin/builtin_impl_sources.gni
++++ b/runtime/bin/builtin_impl_sources.gni
+@@ -9,6 +9,7 @@
+ builtin_impl_sources = [
+   "crypto.cc",
+   "crypto.h",
++  "crypto_ctr.cc",
+   "crypto_fuchsia.cc",
+   "crypto_linux.cc",
+   "crypto_macos.cc",
+@@ -17,6 +18,7 @@ builtin_impl_sources = [
+   "dartutils.h",
+   "directory.cc",
+   "directory.h",
++  "directory_ctr.cc",
+   "directory_fuchsia.cc",
+   "directory_linux.cc",
+   "directory_macos.cc",
+@@ -24,11 +26,13 @@ builtin_impl_sources = [
+   "exe_utils.cc",
+   "exe_utils.h",
+   "fdutils.h",
++  "fdutils_ctr.cc",
+   "fdutils_fuchsia.cc",
+   "fdutils_linux.cc",
+   "fdutils_macos.cc",
+   "file.cc",
+   "file.h",
++  "file_ctr.cc",
+   "file_fuchsia.cc",
+   "file_linux.cc",
+   "file_macos.cc",
+@@ -43,14 +47,17 @@ builtin_impl_sources = [
+   "thread.cc",
+   "thread.h",
+   "thread_absl.cc",
++  "thread_ctr.cc",
+   "thread_fuchsia.cc",
+   "thread_linux.cc",
+   "thread_macos.cc",
+   "thread_win.cc",
++  "unsupported_ctr.h",
+   "uri.cc",
+   "uri.h",
+   "utils.cc",
+   "utils.h",
++  "utils_ctr.cc",
+   "utils_fuchsia.cc",
+   "utils_linux.cc",
+   "utils_macos.cc",
+diff --git a/runtime/bin/crypto_ctr.cc b/runtime/bin/crypto_ctr.cc
+new file mode 100644
+index 00000000..5c705a14
+--- /dev/null
++++ b/runtime/bin/crypto_ctr.cc
+@@ -0,0 +1,22 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "platform/globals.h"
++#if defined(DART_HOST_OS_CTR)
++
++#include "bin/crypto.h"
++#include "bin/unsupported_ctr.h"
++
++namespace dart {
++namespace bin {
++
++bool Crypto::GetRandomBytes(intptr_t count, uint8_t* buffer) {
++  SetCtrUnsupported(CtrArea::kCrypto);
++  return false;
++}
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // defined(DART_HOST_OS_CTR)
+diff --git a/runtime/bin/ctr/BUILD.gn b/runtime/bin/ctr/BUILD.gn
+new file mode 100644
+index 00000000..f64fa3f4
+--- /dev/null
++++ b/runtime/bin/ctr/BUILD.gn
+@@ -0,0 +1,83 @@
++# Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++# for details. All rights reserved. Use of this source code is governed by a
++# BSD-style license that can be found in the LICENSE file.
++
++# The dart:io implementation for CTR embedders. Loading ../BUILD.gn or
++# //third_party/zlib/BUILD.gn in the CTR toolchain fails, because Chromium
++# zlib selects NEON for every ARM CPU ("Unsupported ARM OS"); ARMv6K has none.
++# So these targets restate the dart_io and libdart_builtin source sets.
++
++import("../builtin_impl_sources.gni")
++import("../io_impl_sources.gni")
++
++assert(is_ctr, "These targets build dart:io for the CTR toolchain only")
++
++_configs = [
++  "//runtime:dart_arch_config",
++  "//runtime:dart_config",
++  "//runtime:dart_maybe_product_config",
++  "//runtime:dart_os_config",
++]
++
++config("zlib_config") {
++  include_dirs = [ "//third_party/zlib" ]
++}
++
++# The portable zlib sources, without Chromium's SIMD and CPU detection.
++source_set("zlib") {
++  sources = [
++    "//third_party/zlib/adler32.c",
++    "//third_party/zlib/compress.c",
++    "//third_party/zlib/cpu_features.c",
++    "//third_party/zlib/crc32.c",
++    "//third_party/zlib/deflate.c",
++    "//third_party/zlib/infback.c",
++    "//third_party/zlib/inffast.c",
++    "//third_party/zlib/inflate.c",
++    "//third_party/zlib/inftrees.c",
++    "//third_party/zlib/trees.c",
++    "//third_party/zlib/uncompr.c",
++    "//third_party/zlib/zutil.c",
++  ]
++  defines = [
++    "CPU_NO_SIMD",
++    "ZLIB_IMPLEMENTATION",
++  ]
++  configs -= [ "//build/config/compiler:chromium_code" ]
++  configs += [ "//build/config/compiler:no_chromium_code" ]
++  public_configs = [ ":zlib_config" ]
++}
++
++source_set("libdart_builtin") {
++  configs += _configs
++  include_dirs = [ "//runtime" ]
++  sources = rebase_path(builtin_impl_sources, ".", "..")
++}
++
++source_set("dart_io_sources") {
++  configs += _configs
++  public_configs = [ "//runtime:dart_public_config" ]
++  deps = [
++    ":libdart_builtin",
++    ":zlib",
++  ]
++  # CTR uses secure_socket_unsupported.cc until BoringSSL is ported.
++  defines = [ "DART_IO_SECURE_SOCKET_DISABLED" ]
++  include_dirs = [
++    "//runtime",
++    "//third_party",
++  ]
++  sources = rebase_path(io_impl_sources, ".", "..") + [
++              "../../include/bin/dart_io_api.h",
++              "../builtin.cc",
++              "../builtin_natives.cc",
++              "../dart_io_api_impl.cc",
++              "../io_natives.cc",
++              "../io_natives.h",
++            ]
++}
++
++static_library("dart_io") {
++  complete_static_lib = true
++  deps = [ ":dart_io_sources" ]
++}
+diff --git a/runtime/bin/directory_ctr.cc b/runtime/bin/directory_ctr.cc
+new file mode 100644
+index 00000000..7d0de537
+--- /dev/null
++++ b/runtime/bin/directory_ctr.cc
+@@ -0,0 +1,137 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "platform/globals.h"
++#if defined(DART_HOST_OS_CTR)
++
++#include "bin/directory.h"
++
++#include <errno.h>   // NOLINT
++#include <limits.h>  // NOLINT
++#include <stdlib.h>  // NOLINT
++#include <string.h>  // NOLINT
++
++#include "bin/dartutils.h"
++#include "bin/unsupported_ctr.h"
++
++namespace dart {
++namespace bin {
++
++PathBuffer::PathBuffer() : length_(0) {
++  data_ = calloc(PATH_MAX + 1, sizeof(char));  // NOLINT
++}
++
++PathBuffer::~PathBuffer() {
++  free(data_);
++}
++
++bool PathBuffer::AddW(const wchar_t* name) {
++  UNREACHABLE();
++  return false;
++}
++
++char* PathBuffer::AsString() const {
++  return reinterpret_cast<char*>(data_);
++}
++
++wchar_t* PathBuffer::AsStringW() const {
++  UNREACHABLE();
++  return nullptr;
++}
++
++const char* PathBuffer::AsScopedString() const {
++  return DartUtils::ScopedCopyCString(AsString());
++}
++
++bool PathBuffer::Add(const char* name) {
++  char* data = AsString();
++  int written = snprintf(data + length_, PATH_MAX - length_, "%s", name);
++  data[PATH_MAX] = '\0';
++  if ((written <= PATH_MAX - length_) && (written >= 0) &&
++      (static_cast<size_t>(written) == strnlen(name, PATH_MAX + 1))) {
++    length_ += written;
++    return true;
++  } else {
++    errno = ENAMETOOLONG;
++    return false;
++  }
++}
++
++void PathBuffer::Reset(intptr_t new_length) {
++  length_ = new_length;
++  AsString()[length_] = '\0';
++}
++
++// Recursive listings use this to detect link loops; CTR has no links.
++struct LinkList {};
++
++ListType DirectoryListingEntry::Next(DirectoryListing* listing) {
++  done_ = true;
++  SetCtrUnsupported(CtrArea::kDirectory);
++  return kListError;
++}
++
++DirectoryListingEntry::~DirectoryListingEntry() {
++  ResetLink();
++}
++
++void DirectoryListingEntry::ResetLink() {
++  if ((link_ != nullptr) &&
++      ((parent_ == nullptr) || (parent_->link_ != link_))) {
++    delete link_;
++    link_ = nullptr;
++  }
++  if (parent_ != nullptr) {
++    link_ = parent_->link_;
++  }
++}
++
++Directory::ExistsResult Directory::Exists(Namespace* namespc,
++                                          const char* dir_name) {
++  SetCtrUnsupported(CtrArea::kDirectory);
++  return UNKNOWN;
++}
++
++char* Directory::CurrentNoScope() {
++  SetCtrUnsupported(CtrArea::kDirectory);
++  return nullptr;
++}
++
++bool Directory::Create(Namespace* namespc, const char* dir_name) {
++  SetCtrUnsupported(CtrArea::kDirectory);
++  return false;
++}
++
++// The native has no error channel for this, so it keeps the embedder's
++// override or the Linux default.
++const char* Directory::SystemTemp(Namespace* namespc) {
++  if (Directory::system_temp_path_override_ != nullptr) {
++    return DartUtils::ScopedCopyCString(Directory::system_temp_path_override_);
++  }
++  return DartUtils::ScopedCopyCString("/tmp");
++}
++
++const char* Directory::CreateTemp(Namespace* namespc, const char* prefix) {
++  SetCtrUnsupported(CtrArea::kDirectory);
++  return nullptr;
++}
++
++bool Directory::Delete(Namespace* namespc,
++                       const char* dir_name,
++                       bool recursive) {
++  SetCtrUnsupported(CtrArea::kDirectory);
++  return false;
++}
++
++bool Directory::Rename(Namespace* namespc,
++                       const char* old_path,
++                       const char* new_path) {
++  SetCtrUnsupported(CtrArea::kDirectory);
++  return false;
++}
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // defined(DART_HOST_OS_CTR)
+diff --git a/runtime/bin/eventhandler.h b/runtime/bin/eventhandler.h
+index 7da269ca..3dcef170 100644
+--- a/runtime/bin/eventhandler.h
++++ b/runtime/bin/eventhandler.h
+@@ -602,6 +602,8 @@ class DescriptorInfoMultipleMixin : public DI {
+ #include "bin/eventhandler_macos.h"
+ #elif defined(DART_HOST_OS_WINDOWS)
+ #include "bin/eventhandler_win.h"
++#elif defined(DART_HOST_OS_CTR)
++#include "bin/eventhandler_ctr.h"
+ #else
+ #error Unknown target os.
+ #endif
+diff --git a/runtime/bin/eventhandler_ctr.cc b/runtime/bin/eventhandler_ctr.cc
+new file mode 100644
+index 00000000..a47a7fc5
+--- /dev/null
++++ b/runtime/bin/eventhandler_ctr.cc
+@@ -0,0 +1,34 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "platform/globals.h"
++#if defined(DART_HOST_OS_CTR)
++
++#include "bin/eventhandler.h"
++
++#include "platform/assert.h"
++
++namespace dart {
++namespace bin {
++
++void EventHandlerImplementation::SendData(intptr_t id,
++                                          Dart_Port dart_port,
++                                          int64_t data) {
++  UNREACHABLE();
++}
++
++// EventHandler::Stop waits for a shutdown notice from the handler's own
++// thread, so a handler without a thread cannot start cleanly.
++void EventHandlerImplementation::Start(EventHandler* handler) {
++  FATAL("The dart:io event handler is not supported on CTR");
++}
++
++void EventHandlerImplementation::Shutdown() {
++  UNREACHABLE();
++}
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // defined(DART_HOST_OS_CTR)
+diff --git a/runtime/bin/eventhandler_ctr.h b/runtime/bin/eventhandler_ctr.h
+new file mode 100644
+index 00000000..1d689c1a
+--- /dev/null
++++ b/runtime/bin/eventhandler_ctr.h
+@@ -0,0 +1,36 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#ifndef RUNTIME_BIN_EVENTHANDLER_CTR_H_
++#define RUNTIME_BIN_EVENTHANDLER_CTR_H_
++
++#if !defined(RUNTIME_BIN_EVENTHANDLER_H_)
++#error Do not include eventhandler_ctr.h directly; use eventhandler.h instead.
++#endif
++
++namespace dart {
++namespace bin {
++
++class EventHandler;
++
++// Placeholder until the CTR event handler is ported: starting it aborts the
++// process with a message instead of leaving dart:io waiting on events that
++// would never arrive.
++class EventHandlerImplementation {
++ public:
++  EventHandlerImplementation() {}
++  ~EventHandlerImplementation() {}
++
++  void SendData(intptr_t id, Dart_Port dart_port, int64_t data);
++  void Start(EventHandler* handler);
++  void Shutdown();
++
++ private:
++  DISALLOW_COPY_AND_ASSIGN(EventHandlerImplementation);
++};
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // RUNTIME_BIN_EVENTHANDLER_CTR_H_
+diff --git a/runtime/bin/fdutils_ctr.cc b/runtime/bin/fdutils_ctr.cc
+new file mode 100644
+index 00000000..6120af41
+--- /dev/null
++++ b/runtime/bin/fdutils_ctr.cc
+@@ -0,0 +1,58 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "platform/globals.h"
++#if defined(DART_HOST_OS_CTR)
++
++#include "bin/fdutils.h"
++
++#include "bin/unsupported_ctr.h"
++
++// Descriptor utilities serve the file and socket implementations, which are
++// not yet ported to CTR.
++
++namespace dart {
++namespace bin {
++
++bool FDUtils::SetCloseOnExec(intptr_t fd) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return false;
++}
++
++bool FDUtils::SetNonBlocking(intptr_t fd) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return false;
++}
++
++bool FDUtils::SetBlocking(intptr_t fd) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return false;
++}
++
++bool FDUtils::IsBlocking(intptr_t fd, bool* is_blocking) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return false;
++}
++
++intptr_t FDUtils::AvailableBytes(intptr_t fd) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return -1;
++}
++
++ssize_t FDUtils::ReadFromBlocking(int fd, void* buffer, size_t count) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return -1;
++}
++
++ssize_t FDUtils::WriteToBlocking(int fd, const void* buffer, size_t count) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return -1;
++}
++
++void FDUtils::SaveErrorAndClose(intptr_t fd) {}
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // defined(DART_HOST_OS_CTR)
+diff --git a/runtime/bin/file_ctr.cc b/runtime/bin/file_ctr.cc
+new file mode 100644
+index 00000000..d981fea2
+--- /dev/null
++++ b/runtime/bin/file_ctr.cc
+@@ -0,0 +1,317 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "platform/globals.h"
++#if defined(DART_HOST_OS_CTR)
++
++#include "bin/file.h"
++
++#include <errno.h>   // NOLINT
++#include <stdlib.h>  // NOLINT
++#include <string.h>  // NOLINT
++
++#include "bin/builtin.h"
++#include "bin/namespace.h"
++#include "bin/unsupported_ctr.h"
++#include "bin/uri.h"
++
++// Files are not yet ported to CTR. Every operation fails with errno naming
++// its area (File or Link). Wrapping a descriptor (OpenFD, OpenStdio) cannot
++// fail on other platforms either, so it succeeds and its I/O fails.
++
++namespace dart {
++namespace bin {
++
++class FileHandle {
++ public:
++  explicit FileHandle(int fd) : fd_(fd) {}
++  ~FileHandle() {}
++  int fd() const { return fd_; }
++  void set_fd(int fd) { fd_ = fd; }
++
++ private:
++  int fd_;
++
++  DISALLOW_COPY_AND_ASSIGN(FileHandle);
++};
++
++File::~File() {
++  if (!IsClosed()) {
++    Close();
++  }
++  delete handle_;
++}
++
++void File::Close() {
++  handle_->set_fd(kClosedFd);
++}
++
++intptr_t File::GetFD() {
++  return handle_->fd();
++}
++
++bool File::IsClosed() {
++  return handle_->fd() == kClosedFd;
++}
++
++MappedMemory* File::Map(MapType type,
++                        int64_t position,
++                        int64_t length,
++                        void* start) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return nullptr;
++}
++
++void MappedMemory::Unmap() {
++  address_ = nullptr;
++  size_ = 0;
++}
++
++int64_t File::Read(void* buffer, int64_t num_bytes) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return -1;
++}
++
++int64_t File::Write(const void* buffer, int64_t num_bytes) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return -1;
++}
++
++bool File::VPrint(const char* format, va_list args) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return false;
++}
++
++int64_t File::Position() {
++  SetCtrUnsupported(CtrArea::kFile);
++  return -1;
++}
++
++bool File::SetPosition(int64_t position) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return false;
++}
++
++bool File::Truncate(int64_t length) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return false;
++}
++
++bool File::Flush() {
++  SetCtrUnsupported(CtrArea::kFile);
++  return false;
++}
++
++bool File::Lock(File::LockType lock, int64_t start, int64_t end) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return false;
++}
++
++int64_t File::Length() {
++  SetCtrUnsupported(CtrArea::kFile);
++  return -1;
++}
++
++File* File::FileOpenW(const wchar_t* system_name, FileOpenMode mode) {
++  UNREACHABLE();
++  return nullptr;
++}
++
++File* File::OpenFD(int fd) {
++  return new File(new FileHandle(fd));
++}
++
++File* File::Open(Namespace* namespc,
++                 const char* name,
++                 FileOpenMode mode,
++                 bool executable) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return nullptr;
++}
++
++CStringUniquePtr File::UriToPath(const char* uri) {
++  const char* path =
++      (strlen(uri) >= 8 && strncmp(uri, "file:///", 8) == 0) ? uri + 7 : uri;
++  UriDecoder uri_decoder(path);
++  if (uri_decoder.decoded() == nullptr) {
++    errno = EINVAL;
++    return CStringUniquePtr(nullptr);
++  }
++  return CStringUniquePtr(strdup(uri_decoder.decoded()));
++}
++
++File* File::OpenUri(Namespace* namespc,
++                    const char* uri,
++                    FileOpenMode mode,
++                    bool executable) {
++  auto path = UriToPath(uri);
++  if (path == nullptr) {
++    return nullptr;
++  }
++  return File::Open(namespc, path.get(), mode, executable);
++}
++
++File* File::OpenStdio(int fd) {
++  return new File(new FileHandle(fd));
++}
++
++bool File::Exists(Namespace* namespc, const char* name) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return false;
++}
++
++bool File::ExistsUri(Namespace* namespc, const char* uri) {
++  auto path = UriToPath(uri);
++  if (path == nullptr) {
++    return false;
++  }
++  return File::Exists(namespc, path.get());
++}
++
++bool File::Create(Namespace* namespc, const char* name, bool exclusive) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return false;
++}
++
++bool File::CreateLink(Namespace* namespc,
++                      const char* name,
++                      const char* target) {
++  SetCtrUnsupported(CtrArea::kLink);
++  return false;
++}
++
++bool File::CreatePipe(Namespace* namespc, File** readPipe, File** writePipe) {
++  SetCtrUnsupported(CtrArea::kPipe);
++  return false;
++}
++
++File::Type File::GetType(Namespace* namespc,
++                         const char* name,
++                         bool follow_links) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return File::kDoesNotExist;
++}
++
++bool File::Delete(Namespace* namespc, const char* name) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return false;
++}
++
++bool File::DeleteLink(Namespace* namespc, const char* name) {
++  SetCtrUnsupported(CtrArea::kLink);
++  return false;
++}
++
++bool File::Rename(Namespace* namespc,
++                  const char* old_path,
++                  const char* new_path) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return false;
++}
++
++bool File::RenameLink(Namespace* namespc,
++                      const char* old_path,
++                      const char* new_path) {
++  SetCtrUnsupported(CtrArea::kLink);
++  return false;
++}
++
++bool File::Copy(Namespace* namespc,
++                const char* old_path,
++                const char* new_path) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return false;
++}
++
++int64_t File::LengthFromPath(Namespace* namespc, const char* name) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return -1;
++}
++
++void File::Stat(Namespace* namespc, const char* name, int64_t* data) {
++  SetCtrUnsupported(CtrArea::kFile);
++  data[kType] = kDoesNotExist;
++}
++
++int64_t File::LastModified(Namespace* namespc, const char* name) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return -1;
++}
++
++int64_t File::LastAccessed(Namespace* namespc, const char* name) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return -1;
++}
++
++bool File::SetLastAccessed(Namespace* namespc,
++                           const char* name,
++                           int64_t micros) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return false;
++}
++
++bool File::SetLastModified(Namespace* namespc,
++                           const char* name,
++                           int64_t micros) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return false;
++}
++
++const char* File::LinkTarget(Namespace* namespc,
++                             const char* name,
++                             char* dest,
++                             int dest_size) {
++  SetCtrUnsupported(CtrArea::kLink);
++  return nullptr;
++}
++
++bool File::IsAbsolutePath(const char* pathname) {
++  return ((pathname != nullptr) && (pathname[0] == '/'));
++}
++
++intptr_t File::ReadLinkInto(const char* pathname,
++                            char* result,
++                            size_t result_size) {
++  SetCtrUnsupported(CtrArea::kLink);
++  return -1;
++}
++
++const char* File::ReadLink(const char* pathname) {
++  SetCtrUnsupported(CtrArea::kLink);
++  return nullptr;
++}
++
++const char* File::GetCanonicalPath(Namespace* namespc,
++                                   const char* name,
++                                   char* dest,
++                                   int dest_size) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return nullptr;
++}
++
++const char* File::PathSeparator() {
++  return "/";
++}
++
++const char* File::StringEscapedPathSeparator() {
++  return "/";
++}
++
++File::StdioHandleType File::GetStdioHandleType(int fd) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return kTypeError;
++}
++
++File::Identical File::AreIdentical(Namespace* namespc_1,
++                                   const char* file_1,
++                                   Namespace* namespc_2,
++                                   const char* file_2) {
++  SetCtrUnsupported(CtrArea::kFile);
++  return File::kError;
++}
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // defined(DART_HOST_OS_CTR)
+diff --git a/runtime/bin/file_system_watcher_ctr.cc b/runtime/bin/file_system_watcher_ctr.cc
+new file mode 100644
+index 00000000..1f61d133
+--- /dev/null
++++ b/runtime/bin/file_system_watcher_ctr.cc
+@@ -0,0 +1,54 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "platform/globals.h"
++#if defined(DART_HOST_OS_CTR)
++
++#include "bin/file_system_watcher.h"
++
++#include "bin/unsupported_ctr.h"
++
++// The console has no file change notifications. dart:io reports
++// IsSupported() == false as its own FileSystemException.
++
++namespace dart {
++namespace bin {
++
++Dart_Handle FileSystemWatcher::ReadEvents(intptr_t id, intptr_t path_id) {
++  SetCtrUnsupported(CtrArea::kFileSystemWatcher);
++  return DartUtils::NewDartOSError();
++}
++
++intptr_t FileSystemWatcher::GetSocketId(intptr_t id, intptr_t path_id) {
++  SetCtrUnsupported(CtrArea::kFileSystemWatcher);
++  return -1;
++}
++
++bool FileSystemWatcher::IsSupported() {
++  return false;
++}
++
++void FileSystemWatcher::UnwatchPath(intptr_t id, intptr_t path_id) {}
++
++void FileSystemWatcher::InitOnce() {}
++
++void FileSystemWatcher::Cleanup() {}
++
++intptr_t FileSystemWatcher::Init() {
++  return 0;
++}
++
++intptr_t FileSystemWatcher::WatchPath(intptr_t id,
++                                      Namespace* namespc,
++                                      const char* path,
++                                      int events,
++                                      bool recursive) {
++  SetCtrUnsupported(CtrArea::kFileSystemWatcher);
++  return -1;
++}
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // defined(DART_HOST_OS_CTR)
+diff --git a/runtime/bin/io_impl_sources.gni b/runtime/bin/io_impl_sources.gni
+index d3ace672..f4d590c1 100644
+--- a/runtime/bin/io_impl_sources.gni
++++ b/runtime/bin/io_impl_sources.gni
+@@ -10,6 +10,8 @@ io_impl_sources = [
+   "console_win.cc",
+   "eventhandler.cc",
+   "eventhandler.h",
++  "eventhandler_ctr.cc",
++  "eventhandler_ctr.h",
+   "eventhandler_fuchsia.cc",
+   "eventhandler_fuchsia.h",
+   "eventhandler_linux.cc",
+@@ -20,6 +22,7 @@ io_impl_sources = [
+   "eventhandler_win.h",
+   "file_system_watcher.cc",
+   "file_system_watcher.h",
++  "file_system_watcher_ctr.cc",
+   "file_system_watcher_fuchsia.cc",
+   "file_system_watcher_linux.cc",
+   "file_system_watcher_macos.cc",
+@@ -34,6 +37,7 @@ io_impl_sources = [
+   "io_service_no_ssl.h",
+   "namespace.cc",
+   "namespace.h",
++  "namespace_ctr.cc",
+   "namespace_fuchsia.cc",
+   "namespace_fuchsia.h",
+   "namespace_linux.cc",
+@@ -41,6 +45,7 @@ io_impl_sources = [
+   "namespace_win.cc",
+   "platform.cc",
+   "platform.h",
++  "platform_ctr.cc",
+   "platform_fuchsia.cc",
+   "platform_linux.cc",
+   "platform_macos.cc",
+@@ -48,6 +53,7 @@ io_impl_sources = [
+   "platform_win.cc",
+   "process.cc",
+   "process.h",
++  "process_ctr.cc",
+   "process_fuchsia.cc",
+   "process_linux.cc",
+   "process_macos.cc",
+@@ -69,6 +75,8 @@ io_impl_sources = [
+   "socket.h",
+   "socket_base.cc",
+   "socket_base.h",
++  "socket_base_ctr.cc",
++  "socket_base_ctr.h",
+   "socket_base_fuchsia.cc",
+   "socket_base_fuchsia.h",
+   "socket_base_linux.cc",
+@@ -78,18 +86,21 @@ io_impl_sources = [
+   "socket_base_posix.cc",
+   "socket_base_win.cc",
+   "socket_base_win.h",
++  "socket_ctr.cc",
+   "socket_fuchsia.cc",
+   "socket_linux.cc",
+   "socket_macos.cc",
+   "socket_win.cc",
+   "stdio.cc",
+   "stdio.h",
++  "stdio_ctr.cc",
+   "stdio_fuchsia.cc",
+   "stdio_linux.cc",
+   "stdio_macos.cc",
+   "stdio_win.cc",
+   "sync_socket.cc",
+   "sync_socket.h",
++  "sync_socket_ctr.cc",
+   "sync_socket_fuchsia.cc",
+   "sync_socket_linux.cc",
+   "sync_socket_macos.cc",
+diff --git a/runtime/bin/namespace_ctr.cc b/runtime/bin/namespace_ctr.cc
+new file mode 100644
+index 00000000..4139d6f0
+--- /dev/null
++++ b/runtime/bin/namespace_ctr.cc
+@@ -0,0 +1,63 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "platform/globals.h"
++#if defined(DART_HOST_OS_CTR)
++
++#include "bin/namespace.h"
++
++#include "bin/unsupported_ctr.h"
++
++namespace dart {
++namespace bin {
++
++// CTR has only the default namespace: no descriptor-rooted file system views.
++class NamespaceImpl {};
++
++Namespace* Namespace::Create(intptr_t namespc) {
++  return new Namespace(nullptr);
++}
++
++Namespace* Namespace::Create(const char* path) {
++  return new Namespace(nullptr);
++}
++
++Namespace::~Namespace() {
++  delete namespc_;
++}
++
++intptr_t Namespace::Default() {
++  return kNone;
++}
++
++const char* Namespace::GetCurrent(Namespace* namespc) {
++  SetCtrUnsupported(CtrArea::kDirectory);
++  return nullptr;
++}
++
++bool Namespace::SetCurrent(Namespace* namespc, const char* path) {
++  SetCtrUnsupported(CtrArea::kDirectory);
++  return false;
++}
++
++void Namespace::ResolvePath(Namespace* namespc,
++                            const char* path,
++                            intptr_t* dirfd,
++                            const char** resolved_path) {
++  ASSERT(dirfd != nullptr);
++  ASSERT(resolved_path != nullptr);
++  *dirfd = -1;
++  *resolved_path = path;
++}
++
++NamespaceScope::NamespaceScope(Namespace* namespc, const char* path) {
++  Namespace::ResolvePath(namespc, path, &fd_, &path_);
++}
++
++NamespaceScope::~NamespaceScope() {}
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // defined(DART_HOST_OS_CTR)
+diff --git a/runtime/bin/platform_ctr.cc b/runtime/bin/platform_ctr.cc
+new file mode 100644
+index 00000000..cbefbd37
+--- /dev/null
++++ b/runtime/bin/platform_ctr.cc
+@@ -0,0 +1,92 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "platform/globals.h"
++#if defined(DART_HOST_OS_CTR)
++
++#include "bin/platform.h"
++
++#include "bin/unsupported_ctr.h"
++#include "platform/assert.h"
++
++// Platform queries are not yet ported to CTR. Queries with an error channel
++// fail with errno naming the Platform area; the rest return fixed values.
++
++namespace dart {
++namespace bin {
++
++const char* Platform::executable_name_ = nullptr;
++int Platform::script_index_ = 1;
++char** Platform::argv_ = nullptr;
++
++bool Platform::Initialize(bool install_crash_handler /* = true */) {
++  return true;
++}
++
++int Platform::NumberOfProcessors() {
++  return 1;
++}
++
++const char* Platform::OperatingSystemVersion() {
++  SetCtrUnsupported(CtrArea::kPlatform);
++  return nullptr;
++}
++
++const char* Platform::LibraryPrefix() {
++  return "lib";
++}
++
++const char* Platform::LibraryExtension() {
++  return "so";
++}
++
++const char* Platform::LocaleName() {
++  SetCtrUnsupported(CtrArea::kPlatform);
++  return nullptr;
++}
++
++bool Platform::LocalHostname(char* buffer, intptr_t buffer_length) {
++  SetCtrUnsupported(CtrArea::kPlatform);
++  return false;
++}
++
++char** Platform::Environment(intptr_t* count) {
++  SetCtrUnsupported(CtrArea::kPlatform);
++  return nullptr;
++}
++
++const char* Platform::GetExecutableName() {
++  return executable_name_;
++}
++
++const char* Platform::ResolveExecutablePath() {
++  return nullptr;
++}
++
++intptr_t Platform::ResolveExecutablePathInto(char* result, size_t result_size) {
++  return -1;
++}
++
++void Platform::SetProcessName(const char* name) {}
++
++// dart:io calls these after leaving the isolate, so they cannot throw.
++void Platform::Exit(int exit_code) {
++  FATAL("Platform::Exit is not supported on CTR (dart:io)");
++}
++
++void Platform::_Exit(int exit_code) {
++  FATAL("Platform::_Exit is not supported on CTR (dart:io)");
++}
++
++void Platform::SetCoreDumpResourceLimit(int value) {}
++
++bool Platform::SetEnvironmentVariable(const char* name, const char* value) {
++  SetCtrUnsupported(CtrArea::kPlatform);
++  return false;
++}
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // defined(DART_HOST_OS_CTR)
+diff --git a/runtime/bin/process_ctr.cc b/runtime/bin/process_ctr.cc
+new file mode 100644
+index 00000000..52758a91
+--- /dev/null
++++ b/runtime/bin/process_ctr.cc
+@@ -0,0 +1,118 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "platform/globals.h"
++#if defined(DART_HOST_OS_CTR)
++
++#include "bin/process.h"
++
++#include <3ds.h>
++#include <errno.h>  // NOLINT
++
++#include "bin/dartutils.h"
++#include "bin/unsupported_ctr.h"
++#include "platform/utils.h"
++
++// The console cannot start or signal processes. Process results carry an
++// OSError naming the Process area, and signal watching names Signal.
++
++namespace dart {
++namespace bin {
++
++int Process::global_exit_code_ = 0;
++Mutex* Process::global_exit_code_mutex_ = nullptr;
++Process::ExitHook Process::exit_hook_ = nullptr;
++
++static const char* const kProcessUnsupported =
++    "Process is not supported on CTR (dart:io)";
++
++int Process::Start(Namespace* namespc,
++                   const char* path,
++                   const char* arguments[],
++                   intptr_t arguments_length,
++                   const char* working_directory,
++                   char* environment[],
++                   intptr_t environment_length,
++                   ProcessStartMode mode,
++                   intptr_t* in,
++                   intptr_t* out,
++                   intptr_t* err,
++                   intptr_t* id,
++                   intptr_t* exit_event,
++                   char** os_error_message) {
++  *os_error_message = DartUtils::ScopedCopyCString(kProcessUnsupported);
++  return ENOSYS;
++}
++
++bool Process::Wait(intptr_t pid,
++                   intptr_t in,
++                   intptr_t out,
++                   intptr_t err,
++                   intptr_t exit_event,
++                   ProcessResult* result) {
++  SetCtrUnsupported(CtrArea::kProcess);
++  return false;
++}
++
++int Process::Exec(Namespace* namespc,
++                  const char* path,
++                  const char* arguments[],
++                  intptr_t arguments_length,
++                  const char* working_directory,
++                  char* errmsg,
++                  intptr_t errmsg_len) {
++  Utils::SNPrint(errmsg, errmsg_len, "%s", kProcessUnsupported);
++  errno = ENOSYS;
++  return -1;
++}
++
++bool Process::Kill(intptr_t id, int signal) {
++  SetCtrUnsupported(CtrArea::kProcess);
++  return false;
++}
++
++void Process::TerminateExitCodeHandler() {}
++
++intptr_t Process::CurrentProcessId() {
++  u32 pid = 0;
++  svcGetProcessId(&pid, CUR_PROCESS_HANDLE);
++  return pid;
++}
++
++int64_t Process::CurrentRSS() {
++  SetCtrUnsupported(CtrArea::kProcess);
++  return -1;
++}
++
++int64_t Process::MaxRSS() {
++  SetCtrUnsupported(CtrArea::kProcess);
++  return -1;
++}
++
++SignalInfo::~SignalInfo() {}
++
++intptr_t Process::SetSignalHandler(intptr_t signal) {
++  SetCtrUnsupported(CtrArea::kSignal);
++  return -1;
++}
++
++void Process::ClearSignalHandler(intptr_t signal, Dart_Port port) {}
++
++void Process::ClearSignalHandlerByFd(intptr_t fd, Dart_Port port) {}
++
++void Process::Init() {
++  ASSERT(Process::global_exit_code_mutex_ == nullptr);
++  Process::global_exit_code_mutex_ = new Mutex();
++}
++
++void Process::Cleanup() {
++  ASSERT(Process::global_exit_code_mutex_ != nullptr);
++  delete Process::global_exit_code_mutex_;
++  Process::global_exit_code_mutex_ = nullptr;
++}
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // defined(DART_HOST_OS_CTR)
+diff --git a/runtime/bin/socket.cc b/runtime/bin/socket.cc
+index 06c4e8e2..e93d8eb9 100644
+--- a/runtime/bin/socket.cc
++++ b/runtime/bin/socket.cc
+@@ -1365,6 +1365,15 @@ void FUNCTION_NAME(RawSocketOption_GetOptionValue)(Dart_NativeArguments args) {
+     case DART_IPPROTO_IP:
+       Dart_SetIntegerReturnValue(args, IPPROTO_IP);
+       break;
++#if defined(DART_HOST_OS_CTR)
++    // The console's soc service has no IPv6 and no multicast interface option.
++    case DART_IP_MULTICAST_IF:
++    case DART_IPPROTO_IPV6:
++    case DART_IPV6_MULTICAST_IF:
++      Dart_ThrowException(DartUtils::NewDartUnsupportedError(
++          "RawSocketOption_GetOptionValue is not supported on CTR (dart:io)"));
++      break;
++#else
+     case DART_IP_MULTICAST_IF:
+       Dart_SetIntegerReturnValue(args, IP_MULTICAST_IF);
+       break;
+@@ -1374,6 +1383,7 @@ void FUNCTION_NAME(RawSocketOption_GetOptionValue)(Dart_NativeArguments args) {
+     case DART_IPV6_MULTICAST_IF:
+       Dart_SetIntegerReturnValue(args, IPV6_MULTICAST_IF);
+       break;
++#endif
+     case DART_IPPROTO_TCP:
+       Dart_SetIntegerReturnValue(args, IPPROTO_TCP);
+       break;
+@@ -1525,7 +1535,8 @@ Socket* Socket::GetSocketIdNativeField(Dart_Handle socket_obj) {
+ 
+ void FUNCTION_NAME(SocketControlMessage_fromHandles)(
+     Dart_NativeArguments args) {
+-#if defined(DART_HOST_OS_WINDOWS) || defined(DART_HOST_OS_FUCHSIA)
++#if defined(DART_HOST_OS_WINDOWS) || defined(DART_HOST_OS_FUCHSIA) ||          \
++    defined(DART_HOST_OS_CTR)
+   Dart_SetReturnValue(args,
+                       DartUtils::NewDartUnsupportedError(
+                           "This is not supported on this operating system"));
+@@ -1569,7 +1580,8 @@ void FUNCTION_NAME(SocketControlMessage_fromHandles)(
+ 
+ void FUNCTION_NAME(SocketControlMessageImpl_extractHandles)(
+     Dart_NativeArguments args) {
+-#if defined(DART_HOST_OS_WINDOWS) || defined(DART_HOST_OS_FUCHSIA)
++#if defined(DART_HOST_OS_WINDOWS) || defined(DART_HOST_OS_FUCHSIA) ||          \
++    defined(DART_HOST_OS_CTR)
+   Dart_SetReturnValue(args,
+                       DartUtils::NewDartUnsupportedError(
+                           "This is not supported on this operating system"));
+@@ -1625,7 +1637,8 @@ void FUNCTION_NAME(SocketControlMessageImpl_extractHandles)(
+ }
+ 
+ void FUNCTION_NAME(ResourceHandleImpl_toFile)(Dart_NativeArguments args) {
+-#if defined(DART_HOST_OS_WINDOWS) || defined(DART_HOST_OS_FUCHSIA)
++#if defined(DART_HOST_OS_WINDOWS) || defined(DART_HOST_OS_FUCHSIA) ||          \
++    defined(DART_HOST_OS_CTR)
+   Dart_SetReturnValue(args,
+                       DartUtils::NewDartUnsupportedError(
+                           "This is not supported on this operating system"));
+@@ -1670,7 +1683,8 @@ void FUNCTION_NAME(ResourceHandleImpl_toSocket)(Dart_NativeArguments args) {
+ }
+ 
+ void FUNCTION_NAME(ResourceHandleImpl_toRawSocket)(Dart_NativeArguments args) {
+-#if defined(DART_HOST_OS_WINDOWS) || defined(DART_HOST_OS_FUCHSIA)
++#if defined(DART_HOST_OS_WINDOWS) || defined(DART_HOST_OS_FUCHSIA) ||          \
++    defined(DART_HOST_OS_CTR)
+   Dart_SetReturnValue(args,
+                       DartUtils::NewDartUnsupportedError(
+                           "This is not supported on this operating system"));
+diff --git a/runtime/bin/socket_base.h b/runtime/bin/socket_base.h
+index d236d333..39f90574 100644
+--- a/runtime/bin/socket_base.h
++++ b/runtime/bin/socket_base.h
+@@ -22,6 +22,8 @@
+ #define INET_PTON_FLAWED
+ #elif defined(DART_HOST_OS_WINDOWS)
+ #include "bin/socket_base_win.h"
++#elif defined(DART_HOST_OS_CTR)
++#include "bin/socket_base_ctr.h"
+ #else
+ #error Unknown target os.
+ #endif
+@@ -43,7 +45,11 @@ struct RawAddr {
+     sockaddr_in6 in6;
+     sockaddr_un un;
+     sockaddr_storage ss;
++#if defined(DART_HOST_OS_CTR)
++    ctr_sockaddr addr;
++#else
+     sockaddr addr;
++#endif
+   };
+   socklen_t size = sizeof(sockaddr_storage);
+ 
+diff --git a/runtime/bin/socket_base_ctr.cc b/runtime/bin/socket_base_ctr.cc
+new file mode 100644
+index 00000000..5832b606
+--- /dev/null
++++ b/runtime/bin/socket_base_ctr.cc
+@@ -0,0 +1,254 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "platform/globals.h"
++#if defined(DART_HOST_OS_CTR)
++
++#include "bin/socket_base.h"
++
++#include "bin/unsupported_ctr.h"
++
++// Sockets, addresses and lookups are not yet ported to CTR. Operations with
++// an error channel fail with errno naming their area; the rest return an
++// empty or invalid result.
++
++namespace dart {
++namespace bin {
++
++SocketAddress::SocketAddress(const RawAddr& addr) : addr_(addr) {
++  as_string_[0] = 0;
++}
++
++bool SocketBase::Initialize() {
++  return true;
++}
++
++bool SocketBase::FormatNumericAddress(const RawAddr& addr,
++                                      char* address,
++                                      int len) {
++  SetCtrUnsupported(CtrArea::kInternetAddress);
++  return false;
++}
++
++bool SocketBase::IsBindError(intptr_t error_number) {
++  return false;
++}
++
++intptr_t SocketBase::Available(intptr_t fd) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return -1;
++}
++
++intptr_t SocketBase::Read(intptr_t fd,
++                          void* buffer,
++                          intptr_t num_bytes,
++                          SocketOpKind sync) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return -1;
++}
++
++intptr_t SocketBase::RecvFrom(intptr_t fd,
++                              void* buffer,
++                              intptr_t num_bytes,
++                              RawAddr* addr,
++                              SocketOpKind sync) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return -1;
++}
++
++bool SocketControlMessage::is_file_descriptors_control_message() {
++  return false;
++}
++
++intptr_t SocketBase::ReceiveMessage(intptr_t fd,
++                                    void* buffer,
++                                    int64_t* p_buffer_num_bytes,
++                                    SocketControlMessage** p_messages,
++                                    SocketOpKind sync,
++                                    OSError* p_oserror) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  p_oserror->Reload();
++  return -1;
++}
++
++bool SocketBase::AvailableDatagram(intptr_t fd,
++                                   void* buffer,
++                                   intptr_t num_bytes) {
++  return false;
++}
++
++intptr_t SocketBase::WriteImpl(intptr_t fd,
++                               const void* buffer,
++                               intptr_t num_bytes,
++                               SocketOpKind sync) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return -1;
++}
++
++intptr_t SocketBase::SendTo(intptr_t fd,
++                            const void* buffer,
++                            intptr_t num_bytes,
++                            const RawAddr& addr,
++                            SocketOpKind sync) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return -1;
++}
++
++intptr_t SocketBase::SendMessage(intptr_t fd,
++                                 void* buffer,
++                                 size_t num_bytes,
++                                 SocketControlMessage* messages,
++                                 intptr_t num_messages,
++                                 SocketOpKind sync,
++                                 OSError* p_oserror) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  p_oserror->Reload();
++  return -1;
++}
++
++bool SocketBase::GetSocketName(intptr_t fd, RawAddr* raw) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return false;
++}
++
++intptr_t SocketBase::GetPort(intptr_t fd) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return -1;
++}
++
++SocketAddress* SocketBase::GetRemotePeer(intptr_t fd, intptr_t* port) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return nullptr;
++}
++
++void SocketBase::GetError(intptr_t fd, OSError* os_error) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  os_error->Reload();
++}
++
++int SocketBase::GetType(intptr_t fd) {
++  return File::kOther;
++}
++
++intptr_t SocketBase::GetStdioHandle(intptr_t num) {
++  return num;
++}
++
++AddressList<SocketAddress>* SocketBase::LookupAddress(const char* host,
++                                                      int type,
++                                                      OSError** os_error) {
++  SetCtrUnsupported(CtrArea::kInternetAddress);
++  *os_error = new OSError();
++  return nullptr;
++}
++
++bool SocketBase::ReverseLookup(const RawAddr& addr,
++                               char* host,
++                               intptr_t host_len,
++                               OSError** os_error) {
++  SetCtrUnsupported(CtrArea::kInternetAddress);
++  *os_error = new OSError();
++  return false;
++}
++
++bool SocketBase::ParseAddress(int type, const char* address, RawAddr* addr) {
++  return false;
++}
++
++AddressList<InterfaceSocketAddress>* SocketBase::ListInterfaces(
++    int type,
++    OSError** os_error) {
++  SetCtrUnsupported(CtrArea::kNetworkInterface);
++  *os_error = new OSError();
++  return nullptr;
++}
++
++void SocketBase::Close(intptr_t fd) {}
++
++bool SocketBase::RawAddrToString(RawAddr* addr, char* str) {
++  return false;
++}
++
++bool SocketBase::GetNoDelay(intptr_t fd, bool* enabled) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return false;
++}
++
++bool SocketBase::SetNoDelay(intptr_t fd, bool enabled) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return false;
++}
++
++bool SocketBase::GetMulticastLoop(intptr_t fd,
++                                  intptr_t protocol,
++                                  bool* enabled) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return false;
++}
++
++bool SocketBase::SetMulticastLoop(intptr_t fd,
++                                  intptr_t protocol,
++                                  bool enabled) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return false;
++}
++
++bool SocketBase::GetMulticastHops(intptr_t fd, intptr_t protocol, int* value) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return false;
++}
++
++bool SocketBase::SetMulticastHops(intptr_t fd, intptr_t protocol, int value) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return false;
++}
++
++bool SocketBase::GetBroadcast(intptr_t fd, bool* enabled) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return false;
++}
++
++bool SocketBase::SetBroadcast(intptr_t fd, bool enabled) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return false;
++}
++
++bool SocketBase::GetOption(intptr_t fd,
++                           int level,
++                           int option,
++                           char* data,
++                           unsigned int* length) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return false;
++}
++
++bool SocketBase::SetOption(intptr_t fd,
++                           int level,
++                           int option,
++                           const char* data,
++                           int length) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return false;
++}
++
++bool SocketBase::JoinMulticast(intptr_t fd,
++                               const RawAddr& addr,
++                               const RawAddr&,
++                               int interfaceIndex) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return false;
++}
++
++bool SocketBase::LeaveMulticast(intptr_t fd,
++                                const RawAddr& addr,
++                                const RawAddr&,
++                                int interfaceIndex) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return false;
++}
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // defined(DART_HOST_OS_CTR)
+diff --git a/runtime/bin/socket_base_ctr.h b/runtime/bin/socket_base_ctr.h
+new file mode 100644
+index 00000000..85ab8b54
+--- /dev/null
++++ b/runtime/bin/socket_base_ctr.h
+@@ -0,0 +1,48 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#ifndef RUNTIME_BIN_SOCKET_BASE_CTR_H_
++#define RUNTIME_BIN_SOCKET_BASE_CTR_H_
++
++#if !defined(RUNTIME_BIN_SOCKET_BASE_H_)
++#error Do not include socket_base_ctr.h directly. Use socket_base.h.
++#endif
++
++#include <arpa/inet.h>
++#include <netdb.h>
++#include <netinet/in.h>
++#include <stdint.h>
++#include <sys/socket.h>
++
++// libctru's soc service has no IPv6 and no Unix domain sockets, but the
++// shared socket code names their address types. These declarations only let
++// that code compile; the CTR socket implementation rejects both families.
++struct in6_addr {
++  uint8_t s6_addr[16];
++};
++
++struct sockaddr_in6 {
++  sa_family_t sin6_family;
++  in_port_t sin6_port;
++  uint32_t sin6_flowinfo;
++  struct in6_addr sin6_addr;
++  uint32_t sin6_scope_id;
++};
++
++struct sockaddr_un {
++  sa_family_t sun_family;
++  char sun_path[108];
++};
++
++// libctru's sockaddr ends in a flexible array member, which a union member
++// cannot hold, so RawAddr uses this sockaddr_storage-sized equivalent.
++struct ctr_sockaddr {
++  sa_family_t sa_family;
++  char sa_data[sizeof(sockaddr_storage) - sizeof(sa_family_t)];
++};
++
++#define AF_UNIX 1
++#define INET6_ADDRSTRLEN 46
++
++#endif  // RUNTIME_BIN_SOCKET_BASE_CTR_H_
+diff --git a/runtime/bin/socket_ctr.cc b/runtime/bin/socket_ctr.cc
+new file mode 100644
+index 00000000..c036337c
+--- /dev/null
++++ b/runtime/bin/socket_ctr.cc
+@@ -0,0 +1,86 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "platform/globals.h"
++#if defined(DART_HOST_OS_CTR)
++
++#include "bin/socket.h"
++
++#include "bin/unsupported_ctr.h"
++
++namespace dart {
++namespace bin {
++
++Socket::Socket(intptr_t fd)
++    : ReferenceCounted(),
++      fd_(fd),
++      isolate_port_(Dart_GetMainPortId()),
++      port_(ILLEGAL_PORT),
++      udp_receive_buffer_(nullptr) {}
++
++void Socket::CloseFd() {
++  SetClosedFd();
++}
++
++void Socket::SetClosedFd() {
++  fd_ = kClosedFd;
++}
++
++intptr_t Socket::CreateConnect(const RawAddr& addr) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return -1;
++}
++
++intptr_t Socket::CreateUnixDomainConnect(const RawAddr& addr) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return -1;
++}
++
++intptr_t Socket::CreateBindConnect(const RawAddr& addr,
++                                   const RawAddr& source_addr) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return -1;
++}
++
++intptr_t Socket::CreateUnixDomainBindConnect(const RawAddr& addr,
++                                             const RawAddr& source_addr) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return -1;
++}
++
++intptr_t Socket::CreateBindDatagram(const RawAddr& addr,
++                                    bool reuseAddress,
++                                    bool reusePort,
++                                    int ttl) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return -1;
++}
++
++intptr_t ServerSocket::CreateBindListen(const RawAddr& addr,
++                                        intptr_t backlog,
++                                        bool v6_only) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return -1;
++}
++
++intptr_t ServerSocket::CreateUnixDomainBindListen(const RawAddr& addr,
++                                                  intptr_t backlog) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return -1;
++}
++
++bool ServerSocket::StartAccept(intptr_t fd) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return false;
++}
++
++intptr_t ServerSocket::Accept(intptr_t fd) {
++  SetCtrUnsupported(CtrArea::kSocket);
++  return -1;
++}
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // defined(DART_HOST_OS_CTR)
+diff --git a/runtime/bin/stdio_ctr.cc b/runtime/bin/stdio_ctr.cc
+new file mode 100644
+index 00000000..680d3f75
+--- /dev/null
++++ b/runtime/bin/stdio_ctr.cc
+@@ -0,0 +1,68 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "platform/globals.h"
++#if defined(DART_HOST_OS_CTR)
++
++#include "bin/stdio.h"
++
++#include "bin/unsupported_ctr.h"
++
++namespace dart {
++namespace bin {
++
++bool Stdin::ReadByte(intptr_t fd, int* byte) {
++  SetCtrUnsupported(CtrArea::kStdin);
++  return false;
++}
++
++bool Stdin::GetEchoMode(intptr_t fd, bool* enabled) {
++  SetCtrUnsupported(CtrArea::kStdin);
++  return false;
++}
++
++bool Stdin::SetEchoMode(intptr_t fd, bool enabled) {
++  SetCtrUnsupported(CtrArea::kStdin);
++  return false;
++}
++
++bool Stdin::GetEchoNewlineMode(intptr_t fd, bool* enabled) {
++  SetCtrUnsupported(CtrArea::kStdin);
++  return false;
++}
++
++bool Stdin::SetEchoNewlineMode(intptr_t fd, bool enabled) {
++  SetCtrUnsupported(CtrArea::kStdin);
++  return false;
++}
++
++bool Stdin::GetLineMode(intptr_t fd, bool* enabled) {
++  SetCtrUnsupported(CtrArea::kStdin);
++  return false;
++}
++
++bool Stdin::SetLineMode(intptr_t fd, bool enabled) {
++  SetCtrUnsupported(CtrArea::kStdin);
++  return false;
++}
++
++bool Stdin::AnsiSupported(intptr_t fd, bool* supported) {
++  SetCtrUnsupported(CtrArea::kStdin);
++  return false;
++}
++
++bool Stdout::GetTerminalSize(intptr_t fd, int size[2]) {
++  SetCtrUnsupported(CtrArea::kStdout);
++  return false;
++}
++
++bool Stdout::AnsiSupported(intptr_t fd, bool* supported) {
++  SetCtrUnsupported(CtrArea::kStdout);
++  return false;
++}
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // defined(DART_HOST_OS_CTR)
+diff --git a/runtime/bin/sync_socket_ctr.cc b/runtime/bin/sync_socket_ctr.cc
+new file mode 100644
+index 00000000..893ecca7
+--- /dev/null
++++ b/runtime/bin/sync_socket_ctr.cc
+@@ -0,0 +1,62 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "platform/globals.h"
++#if defined(DART_HOST_OS_CTR)
++
++#include "bin/sync_socket.h"
++
++#include "bin/unsupported_ctr.h"
++
++namespace dart {
++namespace bin {
++
++bool SynchronousSocket::Initialize() {
++  return true;
++}
++
++intptr_t SynchronousSocket::CreateConnect(const RawAddr& addr) {
++  SetCtrUnsupported(CtrArea::kRawSynchronousSocket);
++  return -1;
++}
++
++intptr_t SynchronousSocket::Available(intptr_t fd) {
++  SetCtrUnsupported(CtrArea::kRawSynchronousSocket);
++  return -1;
++}
++
++intptr_t SynchronousSocket::GetPort(intptr_t fd) {
++  SetCtrUnsupported(CtrArea::kRawSynchronousSocket);
++  return -1;
++}
++
++SocketAddress* SynchronousSocket::GetRemotePeer(intptr_t fd, intptr_t* port) {
++  SetCtrUnsupported(CtrArea::kRawSynchronousSocket);
++  return nullptr;
++}
++
++intptr_t SynchronousSocket::Read(intptr_t fd,
++                                 void* buffer,
++                                 intptr_t num_bytes) {
++  SetCtrUnsupported(CtrArea::kRawSynchronousSocket);
++  return -1;
++}
++
++intptr_t SynchronousSocket::Write(intptr_t fd,
++                                  const void* buffer,
++                                  intptr_t num_bytes) {
++  SetCtrUnsupported(CtrArea::kRawSynchronousSocket);
++  return -1;
++}
++
++void SynchronousSocket::ShutdownRead(intptr_t fd) {}
++
++void SynchronousSocket::ShutdownWrite(intptr_t fd) {}
++
++void SynchronousSocket::Close(intptr_t fd) {}
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // defined(DART_HOST_OS_CTR)
+diff --git a/runtime/bin/thread_ctr.cc b/runtime/bin/thread_ctr.cc
+new file mode 100644
+index 00000000..a833e60f
+--- /dev/null
++++ b/runtime/bin/thread_ctr.cc
+@@ -0,0 +1,31 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "platform/globals.h"
++#if defined(DART_HOST_OS_CTR)
++
++#include "bin/thread.h"
++
++#include <errno.h>  // NOLINT
++
++namespace dart {
++namespace bin {
++
++// dart:io's own threads (event handler, process exit handler) are not yet
++// ported; Thread::Start reports this error code.
++int Thread::TryStart(const char* name,
++                     ThreadStartFunction function,
++                     uword parameter) {
++  return ENOSYS;
++}
++
++intptr_t Thread::GetMaxStackSize() {
++  const int kStackSize = (128 * kWordSize * KB);
++  return kStackSize;
++}
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // defined(DART_HOST_OS_CTR)
+diff --git a/runtime/bin/unsupported_ctr.h b/runtime/bin/unsupported_ctr.h
+new file mode 100644
+index 00000000..58ae6355
+--- /dev/null
++++ b/runtime/bin/unsupported_ctr.h
+@@ -0,0 +1,49 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#ifndef RUNTIME_BIN_UNSUPPORTED_CTR_H_
++#define RUNTIME_BIN_UNSUPPORTED_CTR_H_
++
++#include "platform/globals.h"
++
++#if !defined(DART_HOST_OS_CTR)
++#error "unsupported_ctr.h is only for CTR builds."
++#endif
++
++namespace dart {
++namespace bin {
++
++// dart:io areas that are not yet ported to CTR.
++enum class CtrArea {
++  kCrypto,
++  kFile,
++  kFileSystemWatcher,
++  kInternetAddress,
++  kLink,
++  kNetworkInterface,
++  kPipe,
++  kProcess,
++  kRawSynchronousSocket,
++  kSignal,
++  kSocket,
++  kCount,
++};
++
++// An unported operation stores kCtrUnsupportedErrno + area in errno. errno is
++// per thread, so the area reaches the OSError built on the failing thread
++// (including IOService threads) and cannot go stale. OSError reports it as
++// ENOSYS with the message "<Area> is not supported on CTR (dart:io)".
++constexpr int kCtrUnsupportedErrno = 0x43540000;
++
++// Sets errno for an unported operation in |area|.
++void SetCtrUnsupported(CtrArea area);
++
++// Returns the area name for an errno value set by SetCtrUnsupported, or
++// nullptr for any other value.
++const char* CtrUnsupportedArea(int code);
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // RUNTIME_BIN_UNSUPPORTED_CTR_H_
+diff --git a/runtime/bin/utils_ctr.cc b/runtime/bin/utils_ctr.cc
+new file mode 100644
+index 00000000..6f0b20d0
+--- /dev/null
++++ b/runtime/bin/utils_ctr.cc
+@@ -0,0 +1,126 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "platform/globals.h"
++#if defined(DART_HOST_OS_CTR)
++
++#include <3ds.h>
++#include <errno.h>  // NOLINT
++#include <netdb.h>  // NOLINT
++
++#include "bin/unsupported_ctr.h"
++#include "bin/utils.h"
++#include "platform/assert.h"
++#include "platform/utils.h"
++
++namespace dart {
++namespace bin {
++
++static const char* const kAreaNames[] = {
++    "Crypto",
++    "File",
++    "FileSystemWatcher",
++    "InternetAddress",
++    "Link",
++    "NetworkInterface",
++    "Pipe",
++    "Process",
++    "RawSynchronousSocket",
++    "Signal",
++    "Socket",
++};
++static_assert(ARRAY_SIZE(kAreaNames) == static_cast<int>(CtrArea::kCount));
++
++void SetCtrUnsupported(CtrArea area) {
++  errno = kCtrUnsupportedErrno + static_cast<int>(area);
++}
++
++const char* CtrUnsupportedArea(int code) {
++  const int area = code - kCtrUnsupportedErrno;
++  if (area < 0 || area >= static_cast<int>(CtrArea::kCount)) {
++    return nullptr;
++  }
++  return kAreaNames[area];
++}
++
++OSError::OSError() : sub_system_(kSystem), code_(0), message_(nullptr) {
++  Reload();
++}
++
++void OSError::Reload() {
++  SetCodeAndMessage(kSystem, errno);
++}
++
++void OSError::SetCodeAndMessage(SubSystem sub_system, int code) {
++  set_sub_system(sub_system);
++  set_code(code);
++  if (sub_system == kSystem) {
++    const int kBufferSize = 1024;
++    char error_buf[kBufferSize];
++    const char* area = CtrUnsupportedArea(code);
++    if (area != nullptr) {
++      set_code(ENOSYS);
++      Utils::SNPrint(error_buf, kBufferSize,
++                     "%s is not supported on CTR (dart:io)", area);
++      SetMessage(error_buf);
++    } else {
++      SetMessage(Utils::StrError(code, error_buf, kBufferSize));
++    }
++  } else if (sub_system == kGetAddressInfo) {
++    SetMessage(gai_strerror(code));
++  } else {
++    UNREACHABLE();
++  }
++}
++
++// The console's file names are UTF-8.
++const char* StringUtils::ConsoleStringToUtf8(const char* str,
++                                             intptr_t len,
++                                             intptr_t* result_len) {
++  return nullptr;
++}
++
++const char* StringUtils::Utf8ToConsoleString(const char* utf8,
++                                             intptr_t len,
++                                             intptr_t* result_len) {
++  return nullptr;
++}
++
++char* StringUtils::ConsoleStringToUtf8(char* str,
++                                       intptr_t len,
++                                       intptr_t* result_len) {
++  return nullptr;
++}
++
++char* StringUtils::Utf8ToConsoleString(char* utf8,
++                                       intptr_t len,
++                                       intptr_t* result_len) {
++  return nullptr;
++}
++
++bool ShellUtils::GetUtf8Argv(int argc, char** argv) {
++  return false;
++}
++
++void TimerUtils::InitOnce() {}
++
++int64_t TimerUtils::GetCurrentMonotonicMillis() {
++  return GetCurrentMonotonicMicros() / kMicrosecondsPerMillisecond;
++}
++
++// The same tick source as OS::GetCurrentMonotonicMicros in vm/os_ctr.cc.
++int64_t TimerUtils::GetCurrentMonotonicMicros() {
++  const int64_t ticks = svcGetSystemTick();
++  return (ticks / SYSCLOCK_ARM11) * kMicrosecondsPerSecond +
++         ((ticks % SYSCLOCK_ARM11) * kMicrosecondsPerSecond) / SYSCLOCK_ARM11;
++}
++
++void TimerUtils::Sleep(int64_t millis) {
++  svcSleepThread(millis * kNanosecondsPerMillisecond);
++}
++
++}  // namespace bin
++}  // namespace dart
++
++#endif  // defined(DART_HOST_OS_CTR)

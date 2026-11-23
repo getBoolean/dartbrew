@@ -1,0 +1,135 @@
+Compute IEEE remainder and modulo with software arithmetic.
+
+diff --git a/runtime/vm/ctr_double_helpers.cc b/runtime/vm/ctr_double_helpers.cc
+index fdc678d2..fd95a0eb 100755
+--- a/runtime/vm/ctr_double_helpers.cc
++++ b/runtime/vm/ctr_double_helpers.cc
+@@ -161,3 +161,77 @@ extern "C" bool CtrDoublePowSpecial(double base, double exponent, double* result
+   __builtin_memcpy(result, &output, sizeof(output));
+   return true;
+ }
++
++static double RemainderBits(uint64_t bits) {
++  double value;
++  __builtin_memcpy(&value, &bits, sizeof(value));
++  return value;
++}
++
++extern "C" double CtrDoubleRemainder(double left, double right) {
++  uint64_t x, y;
++  __builtin_memcpy(&x, &left, sizeof(x));
++  __builtin_memcpy(&y, &right, sizeof(y));
++  const uint64_t sign = x & UINT64_C(0x8000000000000000);
++  x &= UINT64_C(0x7fffffffffffffff);
++  y &= UINT64_C(0x7fffffffffffffff);
++  const uint64_t infinity = UINT64_C(0x7ff0000000000000);
++  const uint64_t hidden = UINT64_C(0x0010000000000000);
++  const uint64_t fraction = hidden - 1;
++  if (x >= infinity || y > infinity || y == 0) {
++    return RemainderBits(UINT64_C(0x7ff8000000000000));
++  }
++  if (x < y) return left;  // Includes signed zero and finite x / infinite y.
++  if (x == y) return RemainderBits(sign);
++
++  uint64_t mx = x & fraction;
++  uint64_t my = y & fraction;
++  int ex = static_cast<int>(x >> 52);
++  int ey = static_cast<int>(y >> 52);
++  if (ex != 0) {
++    mx |= hidden;
++    ex -= 1023;
++  } else {
++    ex = -1022;
++    while (mx < hidden) { mx <<= 1; --ex; }
++  }
++  if (ey != 0) {
++    my |= hidden;
++    ey -= 1023;
++  } else {
++    ey = -1022;
++    while (my < hidden) { my <<= 1; --ey; }
++  }
++  // Binary long division: after subtraction mx < my, so each following
++  // shift needs at most one subtraction and the accumulator fits 54 bits.
++  while (ex > ey) {
++    if (mx >= my) mx -= my;
++    if (mx == 0) return RemainderBits(sign);
++    mx <<= 1;
++    --ex;
++  }
++  if (mx >= my) mx -= my;
++  if (mx == 0) return RemainderBits(sign);
++  while (mx < hidden) { mx <<= 1; --ex; }
++  // An fmod remainder of binary64 operands is exactly representable.
++  // For subnormal results the discarded low bits are therefore all zero.
++  const uint64_t magnitude = ex >= -1022
++      ? (static_cast<uint64_t>(ex + 1023) << 52) | (mx & fraction)
++      : mx >> (-1022 - ex);
++  return RemainderBits(sign | magnitude);
++}
++
++extern "C" double CtrDoubleModulo(double left, double right) {
++  const double remainder = CtrDoubleRemainder(left, right);
++  uint64_t bits;
++  __builtin_memcpy(&bits, &remainder, sizeof(bits));
++  const uint64_t sign = UINT64_C(0x8000000000000000);
++  const uint64_t magnitude = bits & ~sign;
++  if (magnitude == 0) return RemainderBits(0);
++  if ((bits & sign) != 0 && magnitude < UINT64_C(0x7ff0000000000000)) {
++    uint64_t divisor;
++    __builtin_memcpy(&divisor, &right, sizeof(divisor));
++    return CtrDoubleAdd(remainder, RemainderBits(divisor & ~sign));
++  }
++  return remainder;
++}
+diff --git a/runtime/vm/ctr_double_helpers.h b/runtime/vm/ctr_double_helpers.h
+index d4e0e7ab..2f0c65e4 100755
+--- a/runtime/vm/ctr_double_helpers.h
++++ b/runtime/vm/ctr_double_helpers.h
+@@ -12,6 +12,8 @@ extern "C" double CtrDoubleSub(double left, double right);
+ extern "C" double CtrDoubleMul(double left, double right);
+ extern "C" double CtrDoubleDiv(double left, double right);
+ extern "C" double CtrDoubleSqrt(double value);
++extern "C" double CtrDoubleRemainder(double left, double right);
++extern "C" double CtrDoubleModulo(double left, double right);
+ 
+ // Handles VM power shortcuts without VFP arithmetic. False leaves result unchanged.
+ extern "C" bool CtrDoublePowSpecial(double base, double exponent, double* result);
+diff --git a/runtime/vm/runtime_entry.cc b/runtime/vm/runtime_entry.cc
+index 07b1febf..5ae5fe3f 100644
+--- a/runtime/vm/runtime_entry.cc
++++ b/runtime/vm/runtime_entry.cc
+@@ -5583,6 +5583,9 @@ void OnEveryRuntimeEntryCall(Thread* thread,
+ }
+ 
+ double DartModulo(double left, double right) {
++#if defined(DART_HOST_OS_CTR)
++  return CtrDoubleModulo(left, right);
++#else
+   double remainder = fmod_ieee(left, right);
+   if (remainder == 0.0) {
+     // We explicitly switch to the positive 0.0 (just in case it was negative).
+@@ -5595,6 +5598,7 @@ double DartModulo(double left, double right) {
+     }
+   }
+   return remainder;
++#endif
+ }
+ 
+ // Update global type feedback recorded for a field recording the assignment
+@@ -5730,9 +5734,15 @@ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(DartModulo,
+                                 /*argument_count=*/2,
+                                 static_cast<BinaryMathCFunction>(DartModulo));
+ 
++#if defined(DART_HOST_OS_CTR)
++DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcFmod,
++                                /*argument_count=*/2,
++                                static_cast<BinaryMathCFunction>(CtrDoubleRemainder));
++#else
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcFmod,
+                                 /*argument_count=*/2,
+                                 static_cast<BinaryMathCFunction>(fmod_ieee));
++#endif
+ 
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcAtan2,
+                                 /*argument_count=*/2,

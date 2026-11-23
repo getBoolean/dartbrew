@@ -1,0 +1,115 @@
+Build profiler types and source reports for CTR without sampling threads.
+
+diff --git a/runtime/vm/service.cc b/runtime/vm/service.cc
+index 4adefae9..091a24e9 100644
+--- a/runtime/vm/service.cc
++++ b/runtime/vm/service.cc
+@@ -3879,6 +3879,13 @@ static void GetSourceReport(Thread* thread, JSONStream* js) {
+   }
+   free(reports_str);
+ 
++#if !defined(DART_INCLUDE_PROFILER)
++  if ((report_set & SourceReport::kProfile) != 0) {
++    js->PrintError(kFeatureDisabled, "Profiler is disabled.");
++    return;
++  }
++#endif
++
+   SourceReport::CompileMode compile_mode = SourceReport::kNoCompile;
+   if (BoolParameter::Parse(js->LookupParam("forceCompile"), false)) {
+     compile_mode = SourceReport::kForceCompile;
+diff --git a/runtime/vm/service_event.cc b/runtime/vm/service_event.cc
+index 36fb9d94..6eb04bcd 100644
+--- a/runtime/vm/service_event.cc
++++ b/runtime/vm/service_event.cc
+@@ -328,9 +328,13 @@ void ServiceEvent::PrintJSON(JSONStream* js) const {
+   }
+ 
+   if (kind() == kCpuSamples) {
++#if defined(DART_INCLUDE_PROFILER)
+     JSONObject cpu_profile(&jsobj, "cpuSamples");
+     cpu_profile_->PrintProfileJSON(&cpu_profile, /*include_code_samples=*/false,
+                                    /*is_event=*/true);
++#else
++    jsobj.AddProperty("error", "Profiler is disabled.");
++#endif
+   }
+ }
+ 
+diff --git a/runtime/vm/source_report.cc b/runtime/vm/source_report.cc
+index 15e230bc..211ffe6e 100644
+--- a/runtime/vm/source_report.cc
++++ b/runtime/vm/source_report.cc
+@@ -85,6 +85,7 @@ void SourceReport::Init(Thread* thread,
+   start_pos_ = TokenPosition::Max(start_pos, TokenPosition::kMinSource);
+   end_pos_ = TokenPosition::Min(end_pos, TokenPosition::kMaxSource);
+   ClearScriptTable();
++#if defined(DART_INCLUDE_PROFILER)
+   if (IsReportRequested(kProfile)) {
+     // Build the profile.
+     SampleFilter samplesForIsolate(thread_->isolate()->main_port(),
+@@ -92,6 +93,7 @@ void SourceReport::Init(Thread* thread,
+     profile_.Build(thread, thread->isolate(), &samplesForIsolate,
+                    Profiler::sample_block_buffer());
+   }
++#endif  // defined(DART_INCLUDE_PROFILER)
+ }
+ 
+ bool SourceReport::IsReportRequested(ReportKind report_kind) {
+@@ -533,6 +535,7 @@ void SourceReport::PrintPossibleBreakpointsData(
+   }
+ }
+ 
++#if defined(DART_INCLUDE_PROFILER)
+ void SourceReport::PrintProfileData(JSONObject* jsobj,
+                                     ProfileFunction* profile_function) {
+   ASSERT(profile_function != nullptr);
+@@ -583,6 +586,8 @@ void SourceReport::PrintProfileData(JSONObject* jsobj,
+   }
+ }
+ 
++#endif  // defined(DART_INCLUDE_PROFILER)
++
+ void SourceReport::PrintScriptTable(JSONArray* scripts) {
+   for (intptr_t i = 0; i < script_table_entries_.length(); i++) {
+     const Script* script = script_table_entries_[i]->script;
+@@ -650,6 +655,7 @@ void SourceReport::VisitFunction(JSONArray* jsarr,
+     if (IsReportRequested(kPossibleBreakpoints)) {
+       PrintPossibleBreakpointsData(&range, info);
+     }
++#if defined(DART_INCLUDE_PROFILER)
+     if (IsReportRequested(kProfile)) {
+       if (auto* const profile_function = profile_.FindFunction(func)) {
+         if (profile_function->NumSourcePositions() > 0) {
+@@ -657,6 +663,7 @@ void SourceReport::VisitFunction(JSONArray* jsarr,
+         }
+       }
+     }
++#endif  // defined(DART_INCLUDE_PROFILER)
+   }
+ }
+ 
+diff --git a/runtime/vm/source_report.h b/runtime/vm/source_report.h
+index 8a72ae4b..e342cd7f 100644
+--- a/runtime/vm/source_report.h
++++ b/runtime/vm/source_report.h
+@@ -91,7 +91,9 @@ class SourceReport {
+                          bool report_branch_coverage);
+   void PrintPossibleBreakpointsData(JSONObject* jsobj,
+                                     const SourceReportCodeInfo& params);
++#if defined(DART_INCLUDE_PROFILER)
+   void PrintProfileData(JSONObject* jsobj, ProfileFunction* profile_function);
++#endif
+ #if defined(DEBUG)
+   void VerifyScriptTable();
+ #endif
+@@ -153,7 +155,9 @@ class SourceReport {
+   const Script* script_;
+   TokenPosition start_pos_;
+   TokenPosition end_pos_;
++#if defined(DART_INCLUDE_PROFILER)
+   Profile profile_;
++#endif
+   GrowableArray<ScriptTableEntry*> script_table_entries_;
+   DirectChainedHashMap<ScriptTableTrait> script_table_;
+   intptr_t next_script_index_;

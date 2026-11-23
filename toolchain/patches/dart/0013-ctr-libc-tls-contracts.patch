@@ -1,0 +1,107 @@
+Match newlib and libctru thread-local storage contracts.
+
+diff --git a/runtime/platform/utils.cc b/runtime/platform/utils.cc
+index c44ef0f5..fe5f0dff 100644
+--- a/runtime/platform/utils.cc
++++ b/runtime/platform/utils.cc
+@@ -11,8 +11,6 @@
+     defined(DART_HOST_OS_ANDROID)
+ #include <dlfcn.h>
+ #include <libgen.h>
+-#elif defined(DART_HOST_OS_CTR)
+-#include <libgen.h>
+ #elif defined(DART_HOST_OS_FUCHSIA)
+ #include <dlfcn.h>
+ #include <fuchsia/io/cpp/fidl.h>
+@@ -439,6 +437,15 @@ char* Utils::Basename(const char* path) {
+ #if defined(DART_HOST_OS_FUCHSIA) || defined(DART_HOST_OS_WINDOWS)
+   // Not handled for these operating systems.
+   return nullptr;
++#elif defined(DART_HOST_OS_CTR)
++  if (path == nullptr) return nullptr;
++  intptr_t end = strlen(path);
++  if (end == 0) return Utils::StrDup(".");
++  while (end > 1 && path[end - 1] == '/') --end;
++  intptr_t start = end;
++  while (start > 0 && path[start - 1] != '/') --start;
++  if (start == end) return Utils::StrDup("/");
++  return Utils::StrNDup(path + start, end - start);
+ #else
+   if (path == nullptr) return nullptr;
+   char* const path_copy = Utils::StrDup(path);
+diff --git a/runtime/vm/os_thread_ctr.cc b/runtime/vm/os_thread_ctr.cc
+index 5eaa4b30..1b3368bf 100644
+--- a/runtime/vm/os_thread_ctr.cc
++++ b/runtime/vm/os_thread_ctr.cc
+@@ -2,13 +2,14 @@
+ // Use of this source code is governed by a BSD-style license in LICENSE.
+ #include "platform/globals.h"
+ #if defined(DART_HOST_OS_CTR)
++#include "include/ctr/thread_priorities.h"
+ #include <errno.h>
+ #include "vm/os_thread.h"
+ 
+ extern "C" {
+ extern u32 __ctru_heap;
+ extern u32 __stacksize__;
+-extern char __tdata_align[];
++extern const u32 __tdata_align;
+ }
+ namespace dart {
+ struct CtrNativeThread {
+@@ -40,18 +41,13 @@ static void EstablishFloatingPointMode() {
+   // Match libctru's VFP11 transport policy: nearest rounding, FZ and DN,
+   // exceptions disabled. Dart arithmetic needs software assistance; clearing
+   // FZ alone would trap on subnormals and does not implement IEEE semantics.
+-  const u32 before = __builtin_arm_get_fpscr();
+   const u32 policy = (1u << 25) | (1u << 24);
+   __builtin_arm_set_fpscr(policy);
+   const u32 active = __builtin_arm_get_fpscr();
+   if (active != policy) {
+     FATAL("CTR FPSCR policy failed: 0x%08x", static_cast<unsigned int>(active));
+   }
+-  fprintf(stderr,
+-          "CTR thread %u FPSCR before=%08x active=%08x; software arithmetic "
+-          "required\n",
+-          static_cast<unsigned int>(platform::GetCurrentThreadId()),
+-          static_cast<unsigned int>(before), static_cast<unsigned int>(active));
++
+ }
+ static void JoinAndFree(Thread native, Handle handle) {
+   // libctru threadJoin returns early when its software 'finished' flag is
+@@ -90,7 +86,7 @@ static void Reap(void*) {
+ }
+ void InitializeCtrThreads() {
+   RELEASE_ASSERT(reaper == nullptr && outstanding == 0 && reap_head == nullptr);
+-  RELEASE_ASSERT(reinterpret_cast<uword>(__tdata_align) <= 8);
++  RELEASE_ASSERT(__tdata_align <= 8);
+   main_id = platform::GetCurrentThreadId();
+   RELEASE_ASSERT(threadGetCurrent() == nullptr);
+   // initSystem reserves the main stack at the beginning of __ctru_heap.
+@@ -103,7 +99,7 @@ void InitializeCtrThreads() {
+   LightLock_Init(&reap_lock);
+   LightEvent_Init(&reap_event, RESET_ONESHOT);
+   stopping = false;
+-  reaper = threadCreate(Reap, nullptr, 32 * KB, 0x30, 0, false);
++  reaper = threadCreate(Reap, nullptr, 32 * KB, ctr::kApplicationPriority, 0, false);
+   if (reaper == nullptr) FATAL("CTR native thread reaper could not start");
+   reaper_handle = threadGetHandle(reaper);
+ }
+@@ -131,7 +127,7 @@ static void ThreadStart(void* parameter) {
+   CtrNativeThread* data = static_cast<CtrNativeThread*>(parameter);
+   LightEvent_Wait(&data->ready);
+   current_native = data;
+-  RELEASE_ASSERT(reinterpret_cast<uword>(__tdata_align) <= 8);
++  RELEASE_ASSERT(__tdata_align <= 8);
+   // Pinned libctru sets TP = stacktop - 8, independent of the TLS size.
+   stack_high = reinterpret_cast<uword>(__builtin_thread_pointer()) + 8;
+   stack_low = stack_high - OSThread::GetMaxStackSize();
+@@ -176,7 +172,7 @@ int OSThread::TryStart(const char* name,
+   data->name = Utils::StrDup(name);
+   LightEvent_Init(&data->ready, RESET_ONESHOT);
+   data->native =
+-      threadCreate(ThreadStart, data, GetMaxStackSize(), 0x30, 0, false);
++      threadCreate(ThreadStart, data, GetMaxStackSize(), ctr::kApplicationPriority, 0, false);
+   if (data->native == nullptr) {
+     free(data->name);
+     delete data;

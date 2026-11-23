@@ -1,0 +1,99 @@
+Evaluate optimized power cases using CTR numeric rules.
+
+diff --git a/runtime/vm/compiler/backend/il_arm.cc b/runtime/vm/compiler/backend/il_arm.cc
+index c1cd7fbb..d4c4f6be 100644
+--- a/runtime/vm/compiler/backend/il_arm.cc
++++ b/runtime/vm/compiler/backend/il_arm.cc
+@@ -6128,7 +6128,8 @@ static void InvokeDoublePow(FlowGraphCompiler* compiler,
+ }
+ 
+ void InvokeMathCFunctionInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+-  if (recognized_kind() == MethodRecognizer::kMathDoublePow) {
++  if (recognized_kind() == MethodRecognizer::kMathDoublePow &&
++      !TargetCPUFeatures::armv6k()) {
+     InvokeDoublePow(compiler, this);
+     return;
+   }
+diff --git a/runtime/vm/ctr_double_helpers.cc b/runtime/vm/ctr_double_helpers.cc
+index 54421c77..fdc678d2 100755
+--- a/runtime/vm/ctr_double_helpers.cc
++++ b/runtime/vm/ctr_double_helpers.cc
+@@ -125,3 +125,39 @@ extern "C" double CtrDoubleSqrt(double value) {
+   __builtin_memcpy(&value, &result, sizeof(value));
+   return value;
+ }
++
++extern "C" bool CtrDoublePowSpecial(double base, double exponent, double* result) {
++  uint64_t b, e;
++  __builtin_memcpy(&b, &base, sizeof(b));
++  __builtin_memcpy(&e, &exponent, sizeof(e));
++  const uint64_t magnitude = UINT64_C(0x7fffffffffffffff);
++  const uint64_t infinity = UINT64_C(0x7ff0000000000000);
++  const uint64_t one = UINT64_C(0x3ff0000000000000);
++  uint64_t output;
++  if ((e & magnitude) == 0 || b == one) {
++    output = one;
++  } else if ((b & magnitude) > infinity || (e & magnitude) > infinity) {
++    output = UINT64_C(0x7ff8000000000000);
++  } else if (e == one) {
++    output = b;
++  } else if (e == UINT64_C(0x4000000000000000)) {
++    *result = CtrDoubleMul(base, base);
++    return true;
++  } else if (e == UINT64_C(0x4008000000000000)) {
++    *result = CtrDoubleMul(CtrDoubleMul(base, base), base);
++    return true;
++  } else if (e == UINT64_C(0x3fe0000000000000)) {
++    if ((b & magnitude) == 0) {
++      output = 0;  // Both signed zero bases produce positive zero.
++    } else if ((b & magnitude) == infinity) {
++      output = infinity;  // Unlike sqrt, pow(-infinity, 0.5) is positive infinity.
++    } else {
++      *result = CtrDoubleSqrt(base);
++      return true;
++    }
++  } else {
++    return false;  // General powers remain with the existing libm provider.
++  }
++  __builtin_memcpy(result, &output, sizeof(output));
++  return true;
++}
+diff --git a/runtime/vm/ctr_double_helpers.h b/runtime/vm/ctr_double_helpers.h
+index e430207e..d4e0e7ab 100755
+--- a/runtime/vm/ctr_double_helpers.h
++++ b/runtime/vm/ctr_double_helpers.h
+@@ -13,6 +13,9 @@ extern "C" double CtrDoubleMul(double left, double right);
+ extern "C" double CtrDoubleDiv(double left, double right);
+ extern "C" double CtrDoubleSqrt(double value);
+ 
++// Handles VM power shortcuts without VFP arithmetic. False leaves result unchanged.
++extern "C" bool CtrDoublePowSpecial(double base, double exponent, double* result);
++
+ // Returns -1, 0 or 1 for ordered operands; 2 means unordered (a NaN).
+ extern "C" int CtrDoubleCompare(double left, double right);
+ 
+diff --git a/runtime/vm/runtime_entry.cc b/runtime/vm/runtime_entry.cc
+index 64603e36..07b1febf 100644
+--- a/runtime/vm/runtime_entry.cc
++++ b/runtime/vm/runtime_entry.cc
+@@ -5711,9 +5711,20 @@ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(CtrDoubleSqrt,
+                                 /*argument_count=*/1,
+                                 static_cast<UnaryMathCFunction>(CtrDoubleSqrt));
+ 
++#if defined(DART_HOST_OS_CTR)
++static double CtrPow(double base, double exponent) {
++  double result;
++  if (CtrDoublePowSpecial(base, exponent, &result)) return result;
++  return pow(base, exponent);
++}
++DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcPow,
++                                /*argument_count=*/2,
++                                static_cast<BinaryMathCFunction>(CtrPow));
++#else
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcPow,
+                                 /*argument_count=*/2,
+                                 static_cast<BinaryMathCFunction>(pow));
++#endif
+ 
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(DartModulo,
+                                 /*argument_count=*/2,

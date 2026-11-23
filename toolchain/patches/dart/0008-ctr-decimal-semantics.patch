@@ -1,0 +1,526 @@
+Preserve decimal conversion and formatting at native float boundaries.
+
+diff --git a/runtime/vm/double_conversion.cc b/runtime/vm/double_conversion.cc
+index ca299977..331844f5 100644
+--- a/runtime/vm/double_conversion.cc
++++ b/runtime/vm/double_conversion.cc
+@@ -5,6 +5,7 @@
+ #include "vm/double_conversion.h"
+ 
+ #include "../../third_party/double-conversion/src/double-conversion.h"
++#include "../../third_party/double-conversion/src/ieee-operations.h"
+ 
+ #include "vm/exceptions.h"
+ #include "vm/globals.h"
+@@ -71,7 +72,8 @@ StringPtr DoubleToStringAsFixed(double d, int fraction_digits) {
+   // the decimal point followed by at most fraction_digits digits plus the \0.
+   ASSERT(kBufferSize >= 1 + kMaxDigitsBeforePoint + 1 + kMaxFractionDigits + 1);
+ 
+-  ASSERT(kLowerBoundary < d && d < kUpperBoundary);
++  ASSERT(double_conversion::IeeeLess(kLowerBoundary, d) &&
++         double_conversion::IeeeLess(d, kUpperBoundary));
+ 
+   ASSERT(kMinFractionDigits <= fraction_digits &&
+          fraction_digits <= kMaxFractionDigits);
+diff --git a/third_party/double-conversion/src/bignum-dtoa.cc b/third_party/double-conversion/src/bignum-dtoa.cc
+index 15123e6a..ec2e2a73 100644
+--- a/third_party/double-conversion/src/bignum-dtoa.cc
++++ b/third_party/double-conversion/src/bignum-dtoa.cc
+@@ -88,14 +88,14 @@ static void GenerateCountedDigits(int count, int* decimal_point,
+ 
+ void BignumDtoa(double v, BignumDtoaMode mode, int requested_digits,
+                 Vector<char> buffer, int* length, int* decimal_point) {
+-  DOUBLE_CONVERSION_ASSERT(v > 0);
++  DOUBLE_CONVERSION_ASSERT(IeeeLess(0.0, v));
+   DOUBLE_CONVERSION_ASSERT(!Double(v).IsSpecial());
+   uint64_t significand;
+   int exponent;
+   bool lower_boundary_is_closer;
+   if (mode == BIGNUM_DTOA_SHORTEST_SINGLE) {
+-    float f = static_cast<float>(v);
+-    DOUBLE_CONVERSION_ASSERT(f == v);
++    float f = IeeeFloat(v);
++    DOUBLE_CONVERSION_ASSERT(IeeeEqual(IeeeDouble(f), v));
+     significand = Single(f).Significand();
+     exponent = Single(f).Exponent();
+     lower_boundary_is_closer = Single(f).LowerBoundaryIsCloser();
+@@ -408,8 +408,8 @@ static int EstimatePower(int exponent) {
+ 
+   // For doubles len(f) == 53 (don't forget the hidden bit).
+   const int kSignificandSize = Double::kSignificandSize;
+-  double estimate = ceil((exponent + kSignificandSize - 1) * k1Log10 - 1e-10);
+-  return static_cast<int>(estimate);
++  return DecimalExponentCeil(IeeeSub(
++      IeeeMul(IeeeDouble(exponent + kSignificandSize - 1), k1Log10), 1e-10));
+ }
+ 
+ 
+diff --git a/third_party/double-conversion/src/cached-powers.cc b/third_party/double-conversion/src/cached-powers.cc
+index 56bdfc9d..e8d5a2f7 100644
+--- a/third_party/double-conversion/src/cached-powers.cc
++++ b/third_party/double-conversion/src/cached-powers.cc
+@@ -30,6 +30,7 @@
+ #include <cstdarg>
+ 
+ #include "utils.h"
++#include "ieee-operations.h"
+ 
+ #include "cached-powers.h"
+ 
+@@ -142,7 +143,8 @@ void GetCachedPowerForBinaryExponentRange(
+     DiyFp* power,
+     int* decimal_exponent) {
+   int kQ = DiyFp::kSignificandSize;
+-  double k = ceil((min_exponent + kQ - 1) * kD_1_LOG2_10);
++  int k = DecimalExponentCeil(
++      IeeeMul(IeeeDouble(min_exponent + kQ - 1), kD_1_LOG2_10));
+   int foo = kCachedPowersOffset;
+   int index =
+       (foo + static_cast<int>(k) - 1) / kDecimalExponentDistance + 1;
+diff --git a/third_party/double-conversion/src/double-to-string.cc b/third_party/double-conversion/src/double-to-string.cc
+index 9ea3d18d..5330ed7f 100644
+--- a/third_party/double-conversion/src/double-to-string.cc
++++ b/third_party/double-conversion/src/double-to-string.cc
+@@ -57,7 +57,7 @@ bool DoubleToStringConverter::HandleSpecialValues(
+   Double double_inspect(value);
+   if (double_inspect.IsInfinite()) {
+     if (infinity_symbol_ == DOUBLE_CONVERSION_NULLPTR) return false;
+-    if (value < 0) {
++    if (IeeeLess(value, 0.0)) {
+       result_builder->AddCharacter('-');
+     }
+     result_builder->AddString(infinity_symbol_);
+@@ -190,7 +190,7 @@ bool DoubleToStringConverter::ToShortestIeeeNumber(
+                 &sign, &decimal_rep_length, &decimal_point);
+ 
+   bool unique_zero = (flags_ & UNIQUE_ZERO) != 0;
+-  if (sign && (value != 0.0 || !unique_zero)) {
++  if (sign && (!IeeeEqual(value, 0.0) || !unique_zero)) {
+     result_builder->AddCharacter('-');
+   }
+ 
+@@ -220,7 +220,7 @@ bool DoubleToStringConverter::ToFixed(double value,
+   }
+ 
+   if (requested_digits > kMaxFixedDigitsAfterPoint) return false;
+-  if (value >= kFirstNonFixed || value <= -kFirstNonFixed) return false;
++  if (IeeeLessEqual(kFirstNonFixed, value) || IeeeLessEqual(value, -kFirstNonFixed)) return false;
+ 
+   // Find a sufficiently precise decimal representation of n.
+   int decimal_point;
+@@ -235,7 +235,7 @@ bool DoubleToStringConverter::ToFixed(double value,
+                 &sign, &decimal_rep_length, &decimal_point);
+ 
+   bool unique_zero = ((flags_ & UNIQUE_ZERO) != 0);
+-  if (sign && (value != 0.0 || !unique_zero)) {
++  if (sign && (!IeeeEqual(value, 0.0) || !unique_zero)) {
+     result_builder->AddCharacter('-');
+   }
+ 
+@@ -287,7 +287,7 @@ bool DoubleToStringConverter::ToExponential(
+   }
+ 
+   bool unique_zero = ((flags_ & UNIQUE_ZERO) != 0);
+-  if (sign && (value != 0.0 || !unique_zero)) {
++  if (sign && (!IeeeEqual(value, 0.0) || !unique_zero)) {
+     result_builder->AddCharacter('-');
+   }
+ 
+@@ -325,7 +325,7 @@ bool DoubleToStringConverter::ToPrecision(double value,
+   DOUBLE_CONVERSION_ASSERT(decimal_rep_length <= precision);
+ 
+   bool unique_zero = ((flags_ & UNIQUE_ZERO) != 0);
+-  if (sign && (value != 0.0 || !unique_zero)) {
++  if (sign && (!IeeeEqual(value, 0.0) || !unique_zero)) {
+     result_builder->AddCharacter('-');
+   }
+ 
+@@ -397,7 +397,7 @@ void DoubleToStringConverter::DoubleToAscii(double v,
+ 
+   if (Double(v).Sign() < 0) {
+     *sign = true;
+-    v = -v;
++    v = IeeeNegate(v);
+   } else {
+     *sign = false;
+   }
+@@ -409,7 +409,7 @@ void DoubleToStringConverter::DoubleToAscii(double v,
+     return;
+   }
+ 
+-  if (v == 0) {
++  if (IeeeEqual(v, 0.0)) {
+     vector[0] = '0';
+     vector[1] = '\0';
+     *length = 1;
+diff --git a/third_party/double-conversion/src/double-to-string.h b/third_party/double-conversion/src/double-to-string.h
+index 35449fee..86ac73c0 100644
+--- a/third_party/double-conversion/src/double-to-string.h
++++ b/third_party/double-conversion/src/double-to-string.h
+@@ -29,6 +29,7 @@
+ #define DOUBLE_CONVERSION_DOUBLE_TO_STRING_H_
+ 
+ #include "utils.h"
++#include "ieee-operations.h"
+ 
+ namespace double_conversion {
+ 
+@@ -256,7 +257,7 @@ class DoubleToStringConverter {
+   // digits, however, it only needs one significant digit 1, and thus the
+   // result is 100000000000, which has 12 digits.
+   bool ToShortestSingle(float value, StringBuilder* result_builder) const {
+-    return ToShortestIeeeNumber(value, result_builder, SHORTEST_SINGLE);
++    return ToShortestIeeeNumber(IeeeDouble(value), result_builder, SHORTEST_SINGLE);
+   }
+ 
+ 
+diff --git a/third_party/double-conversion/src/fast-dtoa.cc b/third_party/double-conversion/src/fast-dtoa.cc
+index d7a23984..fed2d62f 100644
+--- a/third_party/double-conversion/src/fast-dtoa.cc
++++ b/third_party/double-conversion/src/fast-dtoa.cc
+@@ -531,7 +531,7 @@ static bool Grisu3(double v,
+     Double(v).NormalizedBoundaries(&boundary_minus, &boundary_plus);
+   } else {
+     DOUBLE_CONVERSION_ASSERT(mode == FAST_DTOA_SHORTEST_SINGLE);
+-    float single_v = static_cast<float>(v);
++    float single_v = IeeeFloat(v);
+     Single(single_v).NormalizedBoundaries(&boundary_minus, &boundary_plus);
+   }
+   DOUBLE_CONVERSION_ASSERT(boundary_plus.e() == w.e());
+@@ -638,7 +638,7 @@ bool FastDtoa(double v,
+               Vector<char> buffer,
+               int* length,
+               int* decimal_point) {
+-  DOUBLE_CONVERSION_ASSERT(v > 0);
++  DOUBLE_CONVERSION_ASSERT(IeeeLess(0.0, v));
+   DOUBLE_CONVERSION_ASSERT(!Double(v).IsSpecial());
+ 
+   bool result = false;
+diff --git a/third_party/double-conversion/src/ieee-operations.h b/third_party/double-conversion/src/ieee-operations.h
+new file mode 100644
+index 00000000..05377ae1
+--- /dev/null
++++ b/third_party/double-conversion/src/ieee-operations.h
+@@ -0,0 +1,79 @@
++// Copyright (c) 2026, the Dart project authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license in LICENSE.
++#ifndef DOUBLE_CONVERSION_IEEE_OPERATIONS_H_
++#define DOUBLE_CONVERSION_IEEE_OPERATIONS_H_
++
++#include "utils.h"
++#include <cmath>
++
++namespace double_conversion {
++
++#if defined(__3DS__)
++// The VM arithmetic bridges use hard-float arguments; GCC's providers use
++// integer registers even in a hard-float binary. Keep that distinction explicit.
++extern "C" double CtrDoubleMul(double, double);
++extern "C" double CtrDoubleDiv(double, double);
++extern "C" double CtrDoubleSub(double, double);
++extern "C" {
++double __aeabi_ul2d(uint64_t) __attribute__((pcs("aapcs")));
++double __aeabi_l2d(int64_t) __attribute__((pcs("aapcs")));
++double __aeabi_i2d(int) __attribute__((pcs("aapcs")));
++int __aeabi_d2iz(double) __attribute__((pcs("aapcs")));
++float __aeabi_d2f(double) __attribute__((pcs("aapcs")));
++double __aeabi_f2d(float) __attribute__((pcs("aapcs")));
++}
++inline double IeeeDouble(uint64_t v) { return __aeabi_ul2d(v); }
++inline double IeeeDouble(int64_t v) { return __aeabi_l2d(v); }
++inline double IeeeDouble(int v) { return __aeabi_i2d(v); }
++inline double IeeeDouble(float v) { return __aeabi_f2d(v); }
++inline float IeeeFloat(double v) { return __aeabi_d2f(v); }
++inline double IeeeMul(double a, double b) { return CtrDoubleMul(a, b); }
++inline double IeeeDiv(double a, double b) { return CtrDoubleDiv(a, b); }
++inline double IeeeSub(double a, double b) { return CtrDoubleSub(a, b); }
++inline double IeeeNegate(double v) {
++  return BitCast<double>(BitCast<uint64_t>(v) ^ (uint64_t(1) << 63));
++}
++inline bool IeeeEqual(double a, double b) {
++  uint64_t x = BitCast<uint64_t>(a), y = BitCast<uint64_t>(b);
++  const uint64_t magnitude = ~(uint64_t(1) << 63);
++  const uint64_t infinity = uint64_t(0x7ff00000) << 32;
++  if ((x & magnitude) > infinity || (y & magnitude) > infinity) return false;
++  return x == y || ((x | y) & magnitude) == 0;
++}
++inline bool IeeeLess(double a, double b) {
++  uint64_t x = BitCast<uint64_t>(a), y = BitCast<uint64_t>(b);
++  const uint64_t sign = uint64_t(1) << 63;
++  const uint64_t magnitude = ~sign;
++  const uint64_t infinity = uint64_t(0x7ff00000) << 32;
++  if ((x & magnitude) > infinity || (y & magnitude) > infinity ||
++      ((x | y) & magnitude) == 0) return false;
++  if ((x ^ y) & sign) return (x & sign) != 0;
++  return (x & sign) ? x > y : x < y;
++}
++#else
++inline double IeeeDouble(uint64_t v) { return static_cast<double>(v); }
++inline double IeeeDouble(int64_t v) { return static_cast<double>(v); }
++inline double IeeeDouble(int v) { return static_cast<double>(v); }
++inline double IeeeDouble(float v) { return static_cast<double>(v); }
++inline float IeeeFloat(double v) { return static_cast<float>(v); }
++inline double IeeeMul(double a, double b) { return a * b; }
++inline double IeeeDiv(double a, double b) { return a / b; }
++inline double IeeeSub(double a, double b) { return a - b; }
++inline double IeeeNegate(double v) { return -v; }
++inline bool IeeeEqual(double a, double b) { return a == b; }
++inline bool IeeeLess(double a, double b) { return a < b; }
++#endif
++inline bool IeeeLessEqual(double a, double b) {
++  return IeeeLess(a, b) || IeeeEqual(a, b);
++}
++// Only decimal exponent estimates call this: finite values in [-400, 400].
++inline int DecimalExponentCeil(double v) {
++#if defined(__3DS__)
++  int truncated = __aeabi_d2iz(v);
++  return truncated + (IeeeLess(IeeeDouble(truncated), v) ? 1 : 0);
++#else
++  return static_cast<int>(ceil(v));
++#endif
++}
++}  // namespace double_conversion
++#endif  // DOUBLE_CONVERSION_IEEE_OPERATIONS_H_
+diff --git a/third_party/double-conversion/src/ieee.h b/third_party/double-conversion/src/ieee.h
+index 9203f4d5..b5fabcd9 100644
+--- a/third_party/double-conversion/src/ieee.h
++++ b/third_party/double-conversion/src/ieee.h
+@@ -29,6 +29,7 @@
+ #define DOUBLE_CONVERSION_DOUBLE_H_
+ 
+ #include "diy-fp.h"
++#include "ieee-operations.h"
+ 
+ namespace double_conversion {
+ 
+@@ -67,7 +68,7 @@ class Double {
+ 
+   // The value encoded by this Double must be strictly greater than 0.
+   DiyFp AsNormalizedDiyFp() const {
+-    DOUBLE_CONVERSION_ASSERT(value() > 0.0);
++    DOUBLE_CONVERSION_ASSERT(!IsNan() && Sign() > 0 && Significand() != 0);
+     uint64_t f = Significand();
+     int e = Exponent();
+ 
+@@ -102,7 +103,7 @@ class Double {
+   }
+ 
+   double PreviousDouble() const {
+-    if (d64_ == (kInfinity | kSignMask)) return -Infinity();
++    if (d64_ == (kInfinity | kSignMask)) return IeeeNegate(Infinity());
+     if (Sign() < 0) {
+       return Double(d64_ + 1).value();
+     } else {
+@@ -189,7 +190,7 @@ class Double {
+   // exponent as m_plus.
+   // Precondition: the value encoded by this Double must be greater than 0.
+   void NormalizedBoundaries(DiyFp* out_m_minus, DiyFp* out_m_plus) const {
+-    DOUBLE_CONVERSION_ASSERT(value() > 0.0);
++    DOUBLE_CONVERSION_ASSERT(!IsNan() && Sign() > 0 && Significand() != 0);
+     DiyFp v = this->AsDiyFp();
+     DiyFp m_plus = DiyFp::Normalize(DiyFp((v.f() << 1) + 1, v.e() - 1));
+     DiyFp m_minus;
+@@ -381,7 +382,7 @@ class Single {
+   // exponent as m_plus.
+   // Precondition: the value encoded by this Single must be greater than 0.
+   void NormalizedBoundaries(DiyFp* out_m_minus, DiyFp* out_m_plus) const {
+-    DOUBLE_CONVERSION_ASSERT(value() > 0.0);
++    DOUBLE_CONVERSION_ASSERT(!IsNan() && Sign() > 0 && Significand() != 0);
+     DiyFp v = this->AsDiyFp();
+     DiyFp m_plus = DiyFp::Normalize(DiyFp((v.f() << 1) + 1, v.e() - 1));
+     DiyFp m_minus;
+diff --git a/third_party/double-conversion/src/string-to-double.cc b/third_party/double-conversion/src/string-to-double.cc
+index b99ba5f2..cacaa30c 100644
+--- a/third_party/double-conversion/src/string-to-double.cc
++++ b/third_party/double-conversion/src/string-to-double.cc
+@@ -370,7 +370,7 @@ static double RadixStringToIeee(Iterator* current,
+   }
+ 
+   DOUBLE_CONVERSION_ASSERT(number < ((int64_t)1 << kSignificandSize));
+-  DOUBLE_CONVERSION_ASSERT(static_cast<int64_t>(static_cast<double>(number)) == number);
++  DOUBLE_CONVERSION_ASSERT(IeeeEqual(IeeeDouble(number), Double(DiyFp(number, 0)).value()));
+ 
+   *result_is_junk = false;
+ 
+@@ -405,12 +405,12 @@ static double RadixStringToIeee(Iterator* current,
+       if (number == 0) return -0.0;
+       number = -number;
+     }
+-    return static_cast<double>(number);
++    return IeeeDouble(number);
+   }
+ 
+   DOUBLE_CONVERSION_ASSERT(number != 0);
+   double result = Double(DiyFp(number, exponent)).value();
+-  return sign ? -result : result;
++  return sign ? IeeeNegate(result) : result;
+ }
+ 
+ template <class Iterator>
+@@ -486,7 +486,7 @@ double StringToDoubleConverter::StringToIeee(
+       }
+ 
+       *processed_characters_count = static_cast<int>(current - input);
+-      return sign ? -Double::Infinity() : Double::Infinity();
++      return sign ? IeeeNegate(Double::Infinity()) : Double::Infinity();
+     }
+   }
+ 
+@@ -504,7 +504,7 @@ double StringToDoubleConverter::StringToIeee(
+       }
+ 
+       *processed_characters_count = static_cast<int>(current - input);
+-      return sign ? -Double::NaN() : Double::NaN();
++      return sign ? IeeeNegate(Double::NaN()) : Double::NaN();
+     }
+   }
+ 
+@@ -737,10 +737,10 @@ double StringToDoubleConverter::StringToIeee(
+   if (read_as_double) {
+     converted = StrtodTrimmed(chars, exponent);
+   } else {
+-    converted = StrtofTrimmed(chars, exponent);
++    converted = IeeeDouble(StrtofTrimmed(chars, exponent));
+   }
+   *processed_characters_count = static_cast<int>(current - input);
+-  return sign? -converted: converted;
++  return sign ? IeeeNegate(converted) : converted;
+ }
+ 
+ 
+@@ -764,7 +764,7 @@ float StringToDoubleConverter::StringToFloat(
+     const char* buffer,
+     int length,
+     int* processed_characters_count) const {
+-  return static_cast<float>(StringToIeee(buffer, length, false,
++  return IeeeFloat(StringToIeee(buffer, length, false,
+                                          processed_characters_count));
+ }
+ 
+@@ -773,7 +773,7 @@ float StringToDoubleConverter::StringToFloat(
+     const uc16* buffer,
+     int length,
+     int* processed_characters_count) const {
+-  return static_cast<float>(StringToIeee(buffer, length, false,
++  return IeeeFloat(StringToIeee(buffer, length, false,
+                                          processed_characters_count));
+ }
+ 
+diff --git a/third_party/double-conversion/src/strtod.cc b/third_party/double-conversion/src/strtod.cc
+index 5fb1b2f1..baa23521 100644
+--- a/third_party/double-conversion/src/strtod.cc
++++ b/third_party/double-conversion/src/strtod.cc
+@@ -211,16 +211,16 @@ static bool DoubleStrtod(Vector<const char> trimmed,
+     // return the best possible approximation.
+     if (exponent < 0 && -exponent < kExactPowersOfTenSize) {
+       // 10^-exponent fits into a double.
+-      *result = static_cast<double>(ReadUint64(trimmed, &read_digits));
++      *result = IeeeDouble(ReadUint64(trimmed, &read_digits));
+       DOUBLE_CONVERSION_ASSERT(read_digits == trimmed.length());
+-      *result /= exact_powers_of_ten[-exponent];
++      *result = IeeeDiv(*result, exact_powers_of_ten[-exponent]);
+       return true;
+     }
+     if (0 <= exponent && exponent < kExactPowersOfTenSize) {
+       // 10^exponent fits into a double.
+-      *result = static_cast<double>(ReadUint64(trimmed, &read_digits));
++      *result = IeeeDouble(ReadUint64(trimmed, &read_digits));
+       DOUBLE_CONVERSION_ASSERT(read_digits == trimmed.length());
+-      *result *= exact_powers_of_ten[exponent];
++      *result = IeeeMul(*result, exact_powers_of_ten[exponent]);
+       return true;
+     }
+     int remaining_digits =
+@@ -230,10 +230,10 @@ static bool DoubleStrtod(Vector<const char> trimmed,
+       // The trimmed string was short and we can multiply it with
+       // 10^remaining_digits. As a result the remaining exponent now fits
+       // into a double too.
+-      *result = static_cast<double>(ReadUint64(trimmed, &read_digits));
++      *result = IeeeDouble(ReadUint64(trimmed, &read_digits));
+       DOUBLE_CONVERSION_ASSERT(read_digits == trimmed.length());
+-      *result *= exact_powers_of_ten[remaining_digits];
+-      *result *= exact_powers_of_ten[exponent - remaining_digits];
++      *result = IeeeMul(*result, exact_powers_of_ten[remaining_digits]);
++      *result = IeeeMul(*result, exact_powers_of_ten[exponent - remaining_digits]);
+       return true;
+     }
+   }
+@@ -435,7 +435,7 @@ static bool ComputeGuess(Vector<const char> trimmed, int exponent,
+       DiyFpStrtod(trimmed, exponent, guess)) {
+     return true;
+   }
+-  if (*guess == Double::Infinity()) {
++  if (IeeeEqual(*guess, Double::Infinity())) {
+     return true;
+   }
+   return false;
+@@ -495,7 +495,7 @@ double Strtod(Vector<const char> buffer, int exponent) {
+ }
+ 
+ static float SanitizedDoubletof(double d) {
+-  DOUBLE_CONVERSION_ASSERT(d >= 0.0);
++  DOUBLE_CONVERSION_ASSERT(IeeeLessEqual(0.0, d));
+   // ASAN has a sanitize check that disallows casting doubles to floats if
+   // they are too big.
+   // https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html#available-checks
+@@ -507,14 +507,14 @@ static float SanitizedDoubletof(double d) {
+   // this value should become infinity.
+   double half_max_finite_infinity =
+       3.40282356779733661637539395458142568448e+38;
+-  if (d >= max_finite) {
+-    if (d >= half_max_finite_infinity) {
++  if (IeeeLessEqual(IeeeDouble(max_finite), d)) {
++    if (IeeeLessEqual(half_max_finite_infinity, d)) {
+       return Single::Infinity();
+     } else {
+       return max_finite;
+     }
+   } else {
+-    return static_cast<float>(d);
++    return IeeeFloat(d);
+   }
+ }
+ 
+@@ -536,7 +536,7 @@ float StrtofTrimmed(Vector<const char> trimmed, int exponent) {
+   bool is_correct = ComputeGuess(trimmed, exponent, &double_guess);
+ 
+   float float_guess = SanitizedDoubletof(double_guess);
+-  if (float_guess == double_guess) {
++  if (IeeeEqual(IeeeDouble(float_guess), double_guess)) {
+     // This shortcut triggers for integer values.
+     return float_guess;
+   }
+@@ -569,26 +569,26 @@ float StrtofTrimmed(Vector<const char> trimmed, int exponent) {
+     f4 = SanitizedDoubletof(double_next2);
+   }
+   (void) f2;  // Mark variable as used.
+-  DOUBLE_CONVERSION_ASSERT(f1 <= f2 && f2 <= f3 && f3 <= f4);
++  DOUBLE_CONVERSION_ASSERT(IeeeLessEqual(IeeeDouble(f1), IeeeDouble(f2)) && IeeeLessEqual(IeeeDouble(f2), IeeeDouble(f3)) && IeeeLessEqual(IeeeDouble(f3), IeeeDouble(f4)));
+ 
+   // If the guess doesn't lie near a single-precision boundary we can simply
+   // return its float-value.
+-  if (f1 == f4) {
++  if (IeeeEqual(IeeeDouble(f1), IeeeDouble(f4))) {
+     return float_guess;
+   }
+ 
+-  DOUBLE_CONVERSION_ASSERT((f1 != f2 && f2 == f3 && f3 == f4) ||
+-         (f1 == f2 && f2 != f3 && f3 == f4) ||
+-         (f1 == f2 && f2 == f3 && f3 != f4));
++  DOUBLE_CONVERSION_ASSERT((!IeeeEqual(IeeeDouble(f1), IeeeDouble(f2)) && IeeeEqual(IeeeDouble(f2), IeeeDouble(f3)) && IeeeEqual(IeeeDouble(f3), IeeeDouble(f4))) ||
++         (IeeeEqual(IeeeDouble(f1), IeeeDouble(f2)) && !IeeeEqual(IeeeDouble(f2), IeeeDouble(f3)) && IeeeEqual(IeeeDouble(f3), IeeeDouble(f4))) ||
++         (IeeeEqual(IeeeDouble(f1), IeeeDouble(f2)) && IeeeEqual(IeeeDouble(f2), IeeeDouble(f3)) && !IeeeEqual(IeeeDouble(f3), IeeeDouble(f4))));
+ 
+   // guess and next are the two possible candidates (in the same way that
+   // double_guess was the lower candidate for a double-precision guess).
+   float guess = f1;
+   float next = f4;
+   DiyFp upper_boundary;
+-  if (guess == 0.0f) {
++  if (IeeeEqual(IeeeDouble(guess), 0.0)) {
+     float min_float = 1e-45f;
+-    upper_boundary = Double(static_cast<double>(min_float) / 2).AsDiyFp();
++    upper_boundary = Double(IeeeDiv(IeeeDouble(min_float), 2.0)).AsDiyFp();
+   } else {
+     upper_boundary = Single(guess).UpperBoundary();
+   }

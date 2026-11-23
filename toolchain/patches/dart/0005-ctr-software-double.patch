@@ -1,0 +1,380 @@
+Run double arithmetic with IEEE software operations on ARM11.
+
+diff --git a/runtime/lib/double.cc b/runtime/lib/double.cc
+index f6b7600c..35c56a0a 100644
+--- a/runtime/lib/double.cc
++++ b/runtime/lib/double.cc
+@@ -9,6 +9,7 @@
+ #include <math.h>  // NOLINT
+ 
+ #include "vm/dart_entry.h"
++#include "vm/ctr_double_helpers.h"
+ #include "vm/double_conversion.h"
+ #include "vm/double_internals.h"
+ #include "vm/exceptions.h"
+@@ -33,7 +34,11 @@ DEFINE_NATIVE_ENTRY(Double_add, 0, 2) {
+   if (FLAG_trace_intrinsified_natives) {
+     OS::PrintErr("Double_add %f + %f\n", left, right);
+   }
++#if defined(DART_HOST_OS_CTR)
++  return Double::New(CtrDoubleAdd(left, right));
++#else
+   return Double::New(left + right);
++#endif
+ }
+ 
+ DEFINE_NATIVE_ENTRY(Double_sub, 0, 2) {
+@@ -43,7 +48,11 @@ DEFINE_NATIVE_ENTRY(Double_sub, 0, 2) {
+   if (FLAG_trace_intrinsified_natives) {
+     OS::PrintErr("Double_sub %f - %f\n", left, right);
+   }
++#if defined(DART_HOST_OS_CTR)
++  return Double::New(CtrDoubleSub(left, right));
++#else
+   return Double::New(left - right);
++#endif
+ }
+ 
+ DEFINE_NATIVE_ENTRY(Double_mul, 0, 2) {
+@@ -53,7 +62,11 @@ DEFINE_NATIVE_ENTRY(Double_mul, 0, 2) {
+   if (FLAG_trace_intrinsified_natives) {
+     OS::PrintErr("Double_mul %f * %f\n", left, right);
+   }
++#if defined(DART_HOST_OS_CTR)
++  return Double::New(CtrDoubleMul(left, right));
++#else
+   return Double::New(left * right);
++#endif
+ }
+ 
+ DEFINE_NATIVE_ENTRY(Double_div, 0, 2) {
+@@ -63,7 +76,11 @@ DEFINE_NATIVE_ENTRY(Double_div, 0, 2) {
+   if (FLAG_trace_intrinsified_natives) {
+     OS::PrintErr("Double_div %f / %f\n", left, right);
+   }
++#if defined(DART_HOST_OS_CTR)
++  return Double::New(CtrDoubleDiv(left, right));
++#else
+   return Double::New(Utils::DivideAllowZero(left, right));
++#endif
+ }
+ 
+ DEFINE_NATIVE_ENTRY(Double_greaterThan, 0, 2) {
+diff --git a/runtime/vm/compiler/asm_intrinsifier_arm.cc b/runtime/vm/compiler/asm_intrinsifier_arm.cc
+index ebc5de8a..2b798f70 100644
+--- a/runtime/vm/compiler/asm_intrinsifier_arm.cc
++++ b/runtime/vm/compiler/asm_intrinsifier_arm.cc
+@@ -788,6 +788,7 @@ void AsmIntrinsifier::Double_lessEqualThan(Assembler* assembler,
+ static void DoubleArithmeticOperations(Assembler* assembler,
+                                        Label* normal_ir_body,
+                                        Token::Kind kind) {
++  if (TargetCPUFeatures::armv6k()) return;
+   Label is_smi, double_op;
+ 
+   TestLastArgumentIsDouble(assembler, &is_smi, normal_ir_body);
+@@ -844,6 +845,7 @@ void AsmIntrinsifier::Double_div(Assembler* assembler, Label* normal_ir_body) {
+ // Left is double, right is integer (Mint or Smi)
+ void AsmIntrinsifier::Double_mulFromInteger(Assembler* assembler,
+                                             Label* normal_ir_body) {
++  if (TargetCPUFeatures::armv6k()) return;
+   Label fall_through;
+   // Only smis allowed.
+   __ ldr(R0, Address(SP, 0 * target::kWordSize));
+diff --git a/runtime/vm/compiler/backend/il_arm.cc b/runtime/vm/compiler/backend/il_arm.cc
+index 72339e8e..5cabe85a 100644
+--- a/runtime/vm/compiler/backend/il_arm.cc
++++ b/runtime/vm/compiler/backend/il_arm.cc
+@@ -4572,6 +4572,20 @@ void UnboxInteger32Instr::EmitNativeCode(FlowGraphCompiler* compiler) {
+ LocationSummary* BinaryDoubleOpInstr::MakeLocationSummary(Zone* zone,
+                                                           bool opt) const {
+   const intptr_t kNumInputs = 2;
++  if (TargetCPUFeatures::armv6k()) {
++    // A native leaf call lets register allocation spill caller-saved live values.
++    // Q1 contains D2/D3; the hard-float second argument must be moved to D1.
++    const intptr_t temps = TargetCPUFeatures::hardfp_supported() ? 0 : 4;
++    auto* summary = new (zone) LocationSummary(
++        zone, kNumInputs, temps, LocationSummary::kNativeLeafCall);
++    summary->set_in(0, Location::FpuRegisterLocation(Q0));
++    summary->set_in(1, Location::FpuRegisterLocation(Q1));
++    summary->set_out(0, Location::FpuRegisterLocation(Q0));
++    for (intptr_t i = 0; i < temps; i++) {
++      summary->set_temp(i, Location::RegisterLocation(static_cast<Register>(R0 + i)));
++    }
++    return summary;
++  }
+   const intptr_t kNumTemps = 0;
+   LocationSummary* summary = new (zone)
+       LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kNoCall);
+@@ -4582,6 +4596,28 @@ LocationSummary* BinaryDoubleOpInstr::MakeLocationSummary(Zone* zone,
+ }
+ 
+ void BinaryDoubleOpInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
++  if (TargetCPUFeatures::armv6k()) {
++    const RuntimeEntry* entry = nullptr;
++    switch (op_kind()) {
++      case Token::kADD: entry = &kCtrDoubleAddRuntimeEntry; break;
++      case Token::kSUB: entry = &kCtrDoubleSubRuntimeEntry; break;
++      case Token::kMUL: entry = &kCtrDoubleMulRuntimeEntry; break;
++      case Token::kDIV: entry = &kCtrDoubleDivRuntimeEntry; break;
++      default: UNREACHABLE();
++    }
++    __ vmovd(D1, D2);
++    compiler::LeafRuntimeScope rt(compiler->assembler(), /*frame_size=*/0,
++                                 /*preserve_registers=*/false);
++    if (!TargetCPUFeatures::hardfp_supported()) {
++      __ vmovrrd(R0, R1, D0);
++      __ vmovrrd(R2, R3, D1);
++    }
++    rt.Call(*entry, entry->argument_count());
++    if (!TargetCPUFeatures::hardfp_supported()) {
++      __ vmovdrr(D0, R0, R1);
++    }
++    return;
++  }
+   const DRegister left = EvenDRegisterOf(locs()->in(0).fpu_reg());
+   const DRegister right = EvenDRegisterOf(locs()->in(1).fpu_reg());
+   const DRegister result = EvenDRegisterOf(locs()->out(0).fpu_reg());
+@@ -5542,6 +5578,17 @@ void UnarySmiOpInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+ 
+ LocationSummary* UnaryDoubleOpInstr::MakeLocationSummary(Zone* zone,
+                                                          bool opt) const {
++  if (TargetCPUFeatures::armv6k() && op_kind() == Token::kSQUARE) {
++    const intptr_t temps = TargetCPUFeatures::hardfp_supported() ? 0 : 4;
++    auto* summary = new (zone) LocationSummary(
++        zone, 1, temps, LocationSummary::kNativeLeafCall);
++    summary->set_in(0, Location::FpuRegisterLocation(Q0));
++    summary->set_out(0, Location::FpuRegisterLocation(Q0));
++    for (intptr_t i = 0; i < temps; i++) {
++      summary->set_temp(i, Location::RegisterLocation(static_cast<Register>(R0 + i)));
++    }
++    return summary;
++  }
+   const intptr_t kNumInputs = 1;
+   const intptr_t kNumTemps = 0;
+   LocationSummary* summary = new (zone)
+@@ -5553,6 +5600,20 @@ LocationSummary* UnaryDoubleOpInstr::MakeLocationSummary(Zone* zone,
+ 
+ void UnaryDoubleOpInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+   ASSERT(representation() == kUnboxedDouble);
++  if (TargetCPUFeatures::armv6k() && op_kind() == Token::kSQUARE) {
++    __ vmovd(D1, D0);
++    compiler::LeafRuntimeScope rt(compiler->assembler(), /*frame_size=*/0,
++                                 /*preserve_registers=*/false);
++    if (!TargetCPUFeatures::hardfp_supported()) {
++      __ vmovrrd(R0, R1, D0);
++      __ vmovrrd(R2, R3, D1);
++    }
++    rt.Call(kCtrDoubleMulRuntimeEntry, 2);
++    if (!TargetCPUFeatures::hardfp_supported()) {
++      __ vmovdrr(D0, R0, R1);
++    }
++    return;
++  }
+   const DRegister result = EvenDRegisterOf(locs()->out(0).fpu_reg());
+   const DRegister value = EvenDRegisterOf(locs()->in(0).fpu_reg());
+   switch (op_kind()) {
+diff --git a/runtime/vm/ctr_double_helpers.cc b/runtime/vm/ctr_double_helpers.cc
+new file mode 100755
+index 00000000..e6eefebe
+--- /dev/null
++++ b/runtime/vm/ctr_double_helpers.cc
+@@ -0,0 +1,34 @@
++// Copyright (c) 2026, the Dart project authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license in LICENSE.
++#include "vm/ctr_double_helpers.h"
++
++#if defined(__3DS__)
++// GCC's ARM runtime helpers use the base AAPCS even in a hard-float binary.
++// Without pcs("aapcs") a declaration silently passes operands in D0/D1 while
++// the provider reads R0-R3. Keep the bridge in a separate translation unit.
++extern "C" {
++double __aeabi_dadd(double, double) __attribute__((pcs("aapcs")));
++double __aeabi_dsub(double, double) __attribute__((pcs("aapcs")));
++double __aeabi_dmul(double, double) __attribute__((pcs("aapcs")));
++double __aeabi_ddiv(double, double) __attribute__((pcs("aapcs")));
++}
++
++extern "C" double CtrDoubleAdd(double left, double right) {
++  return __aeabi_dadd(left, right);
++}
++extern "C" double CtrDoubleSub(double left, double right) {
++  return __aeabi_dsub(left, right);
++}
++extern "C" double CtrDoubleMul(double left, double right) {
++  return __aeabi_dmul(left, right);
++}
++extern "C" double CtrDoubleDiv(double left, double right) {
++  return __aeabi_ddiv(left, right);
++}
++#else
++// Host precompiler/simulator implementation, never linked into CTR binaries.
++extern "C" double CtrDoubleAdd(double left, double right) { return left + right; }
++extern "C" double CtrDoubleSub(double left, double right) { return left - right; }
++extern "C" double CtrDoubleMul(double left, double right) { return left * right; }
++extern "C" double CtrDoubleDiv(double left, double right) { return left / right; }
++#endif
+diff --git a/runtime/vm/ctr_double_helpers.h b/runtime/vm/ctr_double_helpers.h
+new file mode 100755
+index 00000000..174bc97a
+--- /dev/null
++++ b/runtime/vm/ctr_double_helpers.h
+@@ -0,0 +1,13 @@
++// Copyright (c) 2026, the Dart project authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license in LICENSE.
++#ifndef RUNTIME_VM_CTR_DOUBLE_HELPERS_H_
++#define RUNTIME_VM_CTR_DOUBLE_HELPERS_H_
++
++// Hard-float entry points. The CTR definitions bridge to the integer-register
++// software provider; no numeric instruction may consume these operands.
++extern "C" double CtrDoubleAdd(double left, double right);
++extern "C" double CtrDoubleSub(double left, double right);
++extern "C" double CtrDoubleMul(double left, double right);
++extern "C" double CtrDoubleDiv(double left, double right);
++
++#endif  // RUNTIME_VM_CTR_DOUBLE_HELPERS_H_
+diff --git a/runtime/vm/ctr_double_helpers_test.cc b/runtime/vm/ctr_double_helpers_test.cc
+new file mode 100644
+index 00000000..01224d57
+--- /dev/null
++++ b/runtime/vm/ctr_double_helpers_test.cc
+@@ -0,0 +1,77 @@
++// Copyright (c) 2026, the Dart project authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license in LICENSE.
++// Standalone helper/ABI test; numeric_cases.h is produced by the host driver.
++#include <stdint.h>
++#if !defined(CTR_DOUBLE_FREESTANDING)
++#include <stdio.h>
++#endif
++#if !defined(CTR_DOUBLE_BASELINE)
++#include "vm/ctr_double_helpers.h"
++#else
++static double CtrDoubleAdd(double a, double b) { return a + b; }
++static double CtrDoubleSub(double a, double b) { return a - b; }
++static double CtrDoubleMul(double a, double b) { return a * b; }
++static double CtrDoubleDiv(double a, double b) { return a / b; }
++#endif
++#include "numeric_cases.h"
++
++static double FromBits(uint64_t bits) {
++  double value;
++  __builtin_memcpy(&value, &bits, sizeof(value));
++  return value;
++}
++static uint64_t Bits(double value) {
++  uint64_t bits;
++  __builtin_memcpy(&bits, &value, sizeof(bits));
++  return bits;
++}
++static bool IsNaN(uint64_t value) {
++  return (value & UINT64_C(0x7fffffffffffffff)) > UINT64_C(0x7ff0000000000000);
++}
++
++// Volatile indirect calls keep operands dynamic and cross the actual ABI.
++static double (*volatile operations[])(double, double) = {
++    CtrDoubleAdd, CtrDoubleSub, CtrDoubleMul, CtrDoubleDiv};
++
++#if defined(CTR_DOUBLE_FREESTANDING)
++extern "C" void test_write(const char* data, unsigned length);
++extern "C" int test_abi(double (*operation)(double, double));
++#endif
++static void Mismatch(unsigned index, uint64_t actual, uint64_t expected) {
++  const uint64_t values[] = {index, actual, expected};
++  char message[] = "numeric mismatch: case=0000000000000000 actual=0000000000000000 expected=0000000000000000\n";
++  const unsigned offsets[] = {23, 47, 73};
++  for (unsigned i = 0; i < 3; i++) {
++    for (unsigned n = 0; n < 16; n++) {
++      message[offsets[i] + n] = "0123456789abcdef"[(values[i] >> (60 - 4 * n)) & 15];
++    }
++  }
++#if defined(CTR_DOUBLE_FREESTANDING)
++  test_write(message, sizeof(message) - 1);
++#else
++  fputs(message, stderr);
++#endif
++}
++
++int main() {
++#if defined(CTR_DOUBLE_FREESTANDING)
++  uint32_t fpscr;
++  asm volatile("vmrs %0, fpscr" : "=r"(fpscr));
++  if ((fpscr & 0x03000000) != 0x03000000) return 2;
++#endif
++  for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
++    const NumericCase& input = cases[i];
++    const uint64_t actual = Bits(operations[input.op](FromBits(input.a), FromBits(input.b)));
++    if (actual != input.expected && !(IsNaN(actual) && IsNaN(input.expected))) {
++      Mismatch(i, actual, input.expected);
++      return 1;
++    }
++  }
++#if defined(CTR_DOUBLE_FREESTANDING)
++  // D8-D15 and R4-R11 must survive the provider and hard-float bridge.
++  if (test_abi(CtrDoubleDiv) != 0) return 3;
++  asm volatile("vmrs %0, fpscr" : "=r"(fpscr));
++  if ((fpscr & 0x03000000) != 0x03000000) return 4;
++#endif
++  return 0;
++}
+diff --git a/runtime/vm/runtime_entry.cc b/runtime/vm/runtime_entry.cc
+index f58048b5..5ddaee6d 100644
+--- a/runtime/vm/runtime_entry.cc
++++ b/runtime/vm/runtime_entry.cc
+@@ -3,6 +3,7 @@
+ // BSD-style license that can be found in the LICENSE file.
+ 
+ #include "vm/runtime_entry.h"
++#include "vm/ctr_double_helpers.h"
+ 
+ #include <memory>
+ 
+@@ -5686,6 +5687,22 @@ typedef double (*UnaryMathCFunction)(double x);
+ typedef double (*BinaryMathCFunction)(double x, double y);
+ typedef void* (*MemMoveCFunction)(void* dest, const void* src, size_t n);
+ 
++DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(CtrDoubleAdd,
++                                /*argument_count=*/2,
++                                static_cast<BinaryMathCFunction>(CtrDoubleAdd));
++
++DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(CtrDoubleSub,
++                                /*argument_count=*/2,
++                                static_cast<BinaryMathCFunction>(CtrDoubleSub));
++
++DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(CtrDoubleMul,
++                                /*argument_count=*/2,
++                                static_cast<BinaryMathCFunction>(CtrDoubleMul));
++
++DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(CtrDoubleDiv,
++                                /*argument_count=*/2,
++                                static_cast<BinaryMathCFunction>(CtrDoubleDiv));
++
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(LibcPow,
+                                 /*argument_count=*/2,
+                                 static_cast<BinaryMathCFunction>(pow));
+diff --git a/runtime/vm/runtime_entry_list.h b/runtime/vm/runtime_entry_list.h
+index 8cbf0ed6..c66b7848 100644
+--- a/runtime/vm/runtime_entry_list.h
++++ b/runtime/vm/runtime_entry_list.h
+@@ -114,6 +114,10 @@ namespace dart {
+   V(void, NewMarkingStackBlockProcess, Thread*)                                \
+   V(uword /*ObjectPtr*/, EnsureRememberedAndMarkingDeferred,                   \
+     uword /*ObjectPtr*/ object, Thread* thread)                                \
++  V(double, CtrDoubleAdd, double, double)                                       \
++  V(double, CtrDoubleSub, double, double)                                       \
++  V(double, CtrDoubleMul, double, double)                                       \
++  V(double, CtrDoubleDiv, double, double)                                       \
+   V(double, LibcPow, double, double)                                           \
+   V(double, DartModulo, double, double)                                        \
+   V(double, LibcFmod, double, double)                                          \
+diff --git a/runtime/vm/vm_sources.gni b/runtime/vm/vm_sources.gni
+index 5d7ab6a8..8bd60fd6 100644
+--- a/runtime/vm/vm_sources.gni
++++ b/runtime/vm/vm_sources.gni
+@@ -75,6 +75,8 @@ vm_sources = [
+   "cpuinfo.h",
+   "cpuinfo_android.cc",
+   "cpuinfo_ctr.cc",
++  "ctr_double_helpers.cc",
++  "ctr_double_helpers.h",
+   "cpuinfo_fuchsia.cc",
+   "cpuinfo_linux.cc",
+   "cpuinfo_macos.cc",

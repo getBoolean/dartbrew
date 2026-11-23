@@ -1,0 +1,176 @@
+Use software-assisted narrowing and round-to-integer on ARM11.
+
+diff --git a/runtime/vm/compiler/backend/il_arm.cc b/runtime/vm/compiler/backend/il_arm.cc
+index 743a6077..fc870b2f 100644
+--- a/runtime/vm/compiler/backend/il_arm.cc
++++ b/runtime/vm/compiler/backend/il_arm.cc
+@@ -4320,6 +4320,28 @@ void CheckEitherNonSmiInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+   __ b(deopt, EQ);
+ }
+ 
++// Preserve every allocatable volatile register: box/unbox can also allocate on
++// a separate slow path. Keep the result in reserved DTMP across restoration.
++static void EmitCtrFloatConversion(FlowGraphCompiler* compiler,
++                                   DRegister value,
++                                   DRegister result,
++                                   bool narrow) {
++  {
++    compiler::LeafRuntimeScope rt(compiler->assembler(), /*frame_size=*/8,
++                                 /*preserve_registers=*/true);
++    __ StoreDToOffset(value, SP, 0);
++    __ mov(R0, compiler::Operand(SP));
++    __ LoadImmediate(R1, narrow ? 1 : 0);
++    rt.Call(kCtrFloatConvertRuntimeEntry, /*argument_count=*/2);
++    __ LoadDFromOffset(DTMP, SP, 0);
++  }
++  if (narrow) {
++    __ vmovs(EvenSRegisterOf(result), STMP);
++  } else {
++    __ vmovd(result, DTMP);
++  }
++}
++
+ LocationSummary* BoxInstr::MakeLocationSummary(Zone* zone, bool opt) const {
+   const intptr_t kNumInputs = 1;
+   const intptr_t kNumTemps = 1;
+@@ -4344,7 +4366,11 @@ void BoxInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+       __ StoreDToOffset(value, out_reg, ValueOffset() - kHeapObjectTag);
+       break;
+     case kUnboxedFloat:
+-      __ vcvtds(DTMP, EvenSRegisterOf(value));
++      if (TargetCPUFeatures::armv6k()) {
++        EmitCtrFloatConversion(compiler, value, DTMP, /*narrow=*/false);
++      } else {
++        __ vcvtds(DTMP, EvenSRegisterOf(value));
++      }
+       __ StoreDToOffset(EvenDRegisterOf(FpuTMP), out_reg,
+                         ValueOffset() - kHeapObjectTag);
+       break;
+@@ -4409,7 +4435,11 @@ void UnboxInstr::EmitLoadFromBox(FlowGraphCompiler* compiler) {
+       // Should only be <= Q7, because >= Q8 cannot be addressed as S register.
+       const DRegister result = EvenDRegisterOf(locs()->out(0).fpu_reg());
+       __ LoadDFromOffset(result, box, ValueOffset() - kHeapObjectTag);
+-      __ vcvtsd(EvenSRegisterOf(result), result);
++      if (TargetCPUFeatures::armv6k()) {
++        EmitCtrFloatConversion(compiler, result, result, /*narrow=*/true);
++      } else {
++        __ vcvtsd(EvenSRegisterOf(result), result);
++      }
+       break;
+     }
+ 
+@@ -5866,7 +5896,12 @@ void DoubleToFloatInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+   const DRegister value = EvenDRegisterOf(locs()->in(0).fpu_reg());
+   const SRegister result =
+       EvenSRegisterOf(EvenDRegisterOf(locs()->out(0).fpu_reg()));
+-  __ vcvtsd(result, value);
++  if (TargetCPUFeatures::armv6k()) {
++    EmitCtrFloatConversion(compiler, value, EvenDRegisterOf(locs()->out(0).fpu_reg()),
++                           /*narrow=*/true);
++  } else {
++    __ vcvtsd(result, value);
++  }
+ }
+ 
+ LocationSummary* FloatToDoubleInstr::MakeLocationSummary(Zone* zone,
+@@ -5885,7 +5920,12 @@ void FloatToDoubleInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+   const SRegister value =
+       EvenSRegisterOf(EvenDRegisterOf(locs()->in(0).fpu_reg()));
+   const DRegister result = EvenDRegisterOf(locs()->out(0).fpu_reg());
+-  __ vcvtds(result, value);
++  if (TargetCPUFeatures::armv6k()) {
++    EmitCtrFloatConversion(compiler, EvenDRegisterOf(locs()->in(0).fpu_reg()), result,
++                           /*narrow=*/false);
++  } else {
++    __ vcvtds(result, value);
++  }
+ }
+ 
+ LocationSummary* CompareAsMaskInstr::MakeLocationSummary(Zone* zone,
+diff --git a/runtime/vm/ctr_double_helpers.cc b/runtime/vm/ctr_double_helpers.cc
+index 811900b0..3abdbecb 100755
+--- a/runtime/vm/ctr_double_helpers.cc
++++ b/runtime/vm/ctr_double_helpers.cc
+@@ -12,6 +12,8 @@ double __aeabi_dadd(double, double) __attribute__((pcs("aapcs")));
+ double __aeabi_dsub(double, double) __attribute__((pcs("aapcs")));
+ double __aeabi_dmul(double, double) __attribute__((pcs("aapcs")));
+ double __aeabi_ddiv(double, double) __attribute__((pcs("aapcs")));
++float __aeabi_d2f(double) __attribute__((pcs("aapcs")));
++double __aeabi_f2d(float) __attribute__((pcs("aapcs")));
+ }
+ 
+ extern "C" double CtrDoubleAdd(double left, double right) {
+@@ -47,3 +49,25 @@ extern "C" int CtrDoubleCompare(double left, double right) {
+   const bool less = (lhs & sign) ? lhs > rhs : lhs < rhs;
+   return less ? -1 : 1;
+ }
++
++extern "C" void CtrFloatConvert(uint32_t* words, intptr_t narrow) {
++  if (narrow) {
++    double value;
++    __builtin_memcpy(&value, words, sizeof(value));
++#if defined(__3DS__)
++    const float result = __aeabi_d2f(value);
++#else
++    const float result = static_cast<float>(value);
++#endif
++    __builtin_memcpy(words, &result, sizeof(result));
++  } else {
++    float value;
++    __builtin_memcpy(&value, words, sizeof(value));
++#if defined(__3DS__)
++    const double result = __aeabi_f2d(value);
++#else
++    const double result = static_cast<double>(value);
++#endif
++    __builtin_memcpy(words, &result, sizeof(result));
++  }
++}
+diff --git a/runtime/vm/ctr_double_helpers.h b/runtime/vm/ctr_double_helpers.h
+index 25a0b2b7..7f4335ee 100755
+--- a/runtime/vm/ctr_double_helpers.h
++++ b/runtime/vm/ctr_double_helpers.h
+@@ -3,6 +3,8 @@
+ #ifndef RUNTIME_VM_CTR_DOUBLE_HELPERS_H_
+ #define RUNTIME_VM_CTR_DOUBLE_HELPERS_H_
+ 
++#include <stdint.h>
++
+ // Hard-float entry points. The CTR definitions bridge to the integer-register
+ // software provider; no numeric instruction may consume these operands.
+ extern "C" double CtrDoubleAdd(double left, double right);
+@@ -13,4 +15,7 @@ extern "C" double CtrDoubleDiv(double left, double right);
+ // Returns -1, 0 or 1 for ordered operands; 2 means unordered (a NaN).
+ extern "C" int CtrDoubleCompare(double left, double right);
+ 
++// Converts an eight-byte scratch slot in place; narrowing writes its low word.
++extern "C" void CtrFloatConvert(uint32_t* words, intptr_t narrow);
++
+ #endif  // RUNTIME_VM_CTR_DOUBLE_HELPERS_H_
+diff --git a/runtime/vm/runtime_entry.cc b/runtime/vm/runtime_entry.cc
+index 194adbb8..ce025c43 100644
+--- a/runtime/vm/runtime_entry.cc
++++ b/runtime/vm/runtime_entry.cc
+@@ -5687,6 +5687,10 @@ typedef double (*UnaryMathCFunction)(double x);
+ typedef double (*BinaryMathCFunction)(double x, double y);
+ typedef void* (*MemMoveCFunction)(void* dest, const void* src, size_t n);
+ 
++DEFINE_LEAF_RUNTIME_ENTRY(CtrFloatConvert,
++                          /*argument_count=*/2,
++                          CtrFloatConvert);
++
+ DEFINE_FLOAT_LEAF_RUNTIME_ENTRY(CtrDoubleAdd,
+                                 /*argument_count=*/2,
+                                 static_cast<BinaryMathCFunction>(CtrDoubleAdd));
+diff --git a/runtime/vm/runtime_entry_list.h b/runtime/vm/runtime_entry_list.h
+index c66b7848..c0ccffb9 100644
+--- a/runtime/vm/runtime_entry_list.h
++++ b/runtime/vm/runtime_entry_list.h
+@@ -114,6 +114,7 @@ namespace dart {
+   V(void, NewMarkingStackBlockProcess, Thread*)                                \
+   V(uword /*ObjectPtr*/, EnsureRememberedAndMarkingDeferred,                   \
+     uword /*ObjectPtr*/ object, Thread* thread)                                \
++  V(void, CtrFloatConvert, uint32_t*, intptr_t)                                \
+   V(double, CtrDoubleAdd, double, double)                                       \
+   V(double, CtrDoubleSub, double, double)                                       \
+   V(double, CtrDoubleMul, double, double)                                       \
