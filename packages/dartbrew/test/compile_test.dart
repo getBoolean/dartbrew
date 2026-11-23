@@ -43,7 +43,13 @@ Future<String> _compile(FakeSdk sdk, List<String> args) async {
   final text = utf8.decodeStream(controller.stream);
   final out = IOSink(controller);
   final runner = CommandRunner<int>('dartbrew', '')
-    ..addCommand(CompileCommand(start: startBuildStub, out: out));
+    ..addCommand(
+      CompileCommand(
+        environment: sdk.environment,
+        start: startBuildStub,
+        out: out,
+      ),
+    );
   try {
     expect(await runner.run(['compile', '--sdk', sdk.root.path, ...args]), 0);
   } finally {
@@ -237,13 +243,42 @@ void main() {
         ];
         int position(String suffix) =>
             link.indexWhere((a) => a.endsWith(suffix));
-        final io = position('/runtime/$mode-io.a');
+        final io = position('/io.a');
         // The launcher objects call into the I/O layer, which calls the VM.
         expect(io, greaterThan(position('/work/payload.o')));
-        expect(io, lessThan(position('/runtime/$mode.a')));
+        expect(io, lessThan(position('/runtime.a')));
       },
     );
   }
+
+  test(
+    'link failure names the installed and qualified package versions',
+    () async {
+      final sdk = ctrBuildSdk();
+      final linker = File(p.join(sdk.root.path, 'tools', 'ld.dart'));
+      linker.writeAsStringSync(
+        linker.readAsStringSync().replaceFirst(
+          'exitCode = 0;',
+          'exitCode = 42;',
+        ),
+      );
+      final project = _project();
+      await expectLater(
+        _compile(sdk, ['-o', project.output, project.entry]),
+        throwsA(
+          isA<ProcessException>().having(
+            (e) => e.message,
+            'message',
+            allOf(
+              contains('Installed: devkitARM r68-1, libctru 2.7.1-1'),
+              contains('Qualified: devkitARM r68-1, libctru 2.7.0-1'),
+              contains('Update dartbrew or devkitPro'),
+            ),
+          ),
+        ),
+      );
+    },
+  );
 
   group('SDK verification', () {
     test('ignores a modified asset the build does not read', () async {
@@ -260,7 +295,7 @@ void main() {
     test('names a modified asset the build reads', () async {
       final sdk = ctrBuildSdk();
       File(
-        p.join(sdk.root.path, 'runtime', 'aot-io.a'),
+        p.join(sdk.root.path, 'native-src', 'io.cc'),
       ).writeAsStringSync('changed');
       final project = _project();
       await expectLater(
@@ -269,21 +304,18 @@ void main() {
           isA<FormatException>().having(
             (e) => e.message,
             'message',
-            'SDK asset hash mismatch: runtime/aot-io.a',
+            contains('SDK asset hash mismatch: native-src/io.cc'),
           ),
         ),
       );
     });
 
     test(
-      'an SDK manifest without io_archive exits 65 naming the key',
+      'an SDK manifest without the compile plan exits 65 naming the key',
       () async {
         final sdk = ctrBuildSdk();
         sdk.editManifest((json) {
-          final modes = (json['runtime']! as Map)['modes']! as Map;
-          for (final mode in modes.values) {
-            (mode as Map).remove('io_archive');
-          }
+          (json['runtime']! as Map).remove('compile_plan');
         });
         final project = _project();
         final result = await Process.run(Platform.resolvedExecutable, [
@@ -296,7 +328,7 @@ void main() {
           project.entry,
         ]);
         expect(result.exitCode, 65);
-        expect(result.stderr, contains('runtime.modes.aot.io_archive'));
+        expect(result.stderr, contains('runtime.compile_plan'));
         expect(
           (result.stderr as String).toLowerCase(),
           contains('update dartbrew'),
@@ -351,7 +383,9 @@ void main() {
       pubspec: 'name: snake\ndartbrew:\n  icon: icon.png\n',
     );
     final runner = CommandRunner<int>('dartbrew', '')
-      ..addCommand(CompileCommand(start: startBuildStub));
+      ..addCommand(
+        CompileCommand(environment: sdk.environment, start: startBuildStub),
+      );
     await expectLater(
       runner.run([
         'compile',
@@ -407,7 +441,9 @@ void main() {
     ]);
     expect(_json(p.join(project.output, 'run.json'))['fixture'], 'hello');
     final runner = CommandRunner<int>('dartbrew', '')
-      ..addCommand(CompileCommand(start: startBuildStub));
+      ..addCommand(
+        CompileCommand(environment: sdk.environment, start: startBuildStub),
+      );
     expect(runner.commands['compile']!.usage, isNot(contains('--fixture')));
   });
 
@@ -418,7 +454,9 @@ void main() {
       ..createSync(recursive: true)
       ..writeAsStringSync('keep');
     final runner = CommandRunner<int>('dartbrew', '')
-      ..addCommand(CompileCommand(start: startBuildStub));
+      ..addCommand(
+        CompileCommand(environment: sdk.environment, start: startBuildStub),
+      );
     await expectLater(
       runner.run([
         'compile',
@@ -448,7 +486,9 @@ void main() {
     final project = _project();
     final other = Directory(p.join(project.owner.path, 'other'))..createSync();
     final runner = CommandRunner<int>('dartbrew', '')
-      ..addCommand(CompileCommand(start: startBuildStub));
+      ..addCommand(
+        CompileCommand(environment: sdk.environment, start: startBuildStub),
+      );
     await expectLater(
       runner.run([
         'compile',

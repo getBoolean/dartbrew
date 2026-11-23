@@ -2,6 +2,8 @@
 /// runtime, link inputs and sealed files.
 library;
 
+export 'src/targets/ctr/link_template.dart' show ctrLinkTemplate;
+
 /// The message appended to every manifest error: a manifest this dartbrew
 /// cannot read comes from an SDK that does not match it.
 const _mismatchAdvice =
@@ -12,8 +14,6 @@ const _mismatchAdvice =
 enum SdkTool {
   snapshot('snapshot'),
   kernel('kernel'),
-  assembler('as'),
-  linker('ld'),
   dart('dart');
 
   /// The key that names this tool in the manifest.
@@ -35,83 +35,25 @@ final class RuntimeMode {
   /// The launcher compatibility token the program must carry.
   final String compatibility;
 
-  /// The launcher objects, linked in this order.
-  final List<String> objects;
+  const RuntimeMode({required this.compatibility});
 
-  /// The archive holding the Dart VM.
-  final String archive;
+  factory RuntimeMode._read(_JsonObject json) =>
+      RuntimeMode(compatibility: json.string('compatibility'));
 
-  /// The archive holding the CTR `dart:io` layer.
-  final String ioArchive;
-
-  const RuntimeMode({
-    required this.compatibility,
-    required this.objects,
-    required this.archive,
-    required this.ioArchive,
-  });
-
-  factory RuntimeMode._read(_JsonObject json) => RuntimeMode(
-    compatibility: json.string('compatibility'),
-    objects: json.strings('objects'),
-    archive: json.string('archive'),
-    ioArchive: json.string('io_archive'),
-  );
-
-  Map<String, Object> _toJson() => {
-    'compatibility': compatibility,
-    'objects': objects,
-    'archive': archive,
-    'io_archive': ioArchive,
-  };
+  Map<String, Object> _toJson() => {'compatibility': compatibility};
 }
 
-/// The SDK files the linker reads besides the program and the runtime.
-final class LinkPlan {
-  /// The linker script.
-  final String layout;
+/// Installed or qualified devkitPro package releases.
+final class DevkitProVersions {
+  final String devkitARM;
+  final String libctru;
+  const DevkitProVersions({required this.devkitARM, required this.libctru});
+  const DevkitProVersions.unknown()
+    : devkitARM = 'unknown',
+      libctru = 'unknown';
 
-  /// The soft-float math object.
-  final String math;
-
-  /// Startup objects, linked first.
-  final List<String> startup;
-
-  /// Libraries linked after the runtime archives.
-  final List<String> libraries;
-
-  /// Libraries linked inside one `--start-group`/`--end-group`.
-  final List<String> grouped;
-
-  /// Objects linked last.
-  final List<String> end;
-
-  const LinkPlan({
-    required this.layout,
-    required this.math,
-    required this.startup,
-    required this.libraries,
-    required this.grouped,
-    required this.end,
-  });
-
-  factory LinkPlan._read(_JsonObject json) => LinkPlan(
-    layout: json.string('layout'),
-    math: json.string('math'),
-    startup: json.strings('startup'),
-    libraries: json.strings('libraries'),
-    grouped: json.strings('grouped'),
-    end: json.strings('end'),
-  );
-
-  Map<String, Object> _toJson() => {
-    'layout': layout,
-    'math': math,
-    'startup': startup,
-    'libraries': libraries,
-    'grouped': grouped,
-    'end': end,
-  };
+  @override
+  String toString() => 'devkitARM $devkitARM, libctru $libctru';
 }
 
 /// The CTR runtime the SDK ships.
@@ -128,16 +70,27 @@ final class SdkRuntime {
   /// The runtime for JIT builds.
   final RuntimeMode jit;
 
-  /// The other link inputs.
-  final LinkPlan link;
+  final String snapshotHash;
+  final String compilePlan;
+  final String nativeSrc;
+  final List<String> linkTemplate;
+  final DevkitProVersions devkitPro;
 
   const SdkRuntime({
     required this.sdkHead,
     required this.platform,
     required this.aot,
     required this.jit,
-    required this.link,
+    required this.snapshotHash,
+    required this.compilePlan,
+    required this.nativeSrc,
+    required this.linkTemplate,
+    required this.devkitPro,
   });
+
+  /// Reads runtime metadata from the runtime producer before host assembly.
+  factory SdkRuntime.fromJson(Object? json) =>
+      SdkRuntime._read(_JsonObject.root(json));
 
   factory SdkRuntime._read(_JsonObject json) {
     final modes = json.object('modes');
@@ -146,7 +99,14 @@ final class SdkRuntime {
       platform: json.string('platform'),
       aot: RuntimeMode._read(modes.object('aot')),
       jit: RuntimeMode._read(modes.object('jit')),
-      link: LinkPlan._read(json.object('link')),
+      snapshotHash: json.string('snapshot_hash'),
+      compilePlan: json.assetPath('compile_plan'),
+      nativeSrc: json.assetPath('native_src'),
+      linkTemplate: json.strings('link_template'),
+      devkitPro: DevkitProVersions(
+        devkitARM: json.object('devkitpro').string('devkitARM'),
+        libctru: json.object('devkitpro').string('libctru'),
+      ),
     );
   }
 
@@ -154,7 +114,14 @@ final class SdkRuntime {
     'sdk_head': sdkHead,
     'platform': platform,
     'modes': {'aot': aot._toJson(), 'jit': jit._toJson()},
-    'link': link._toJson(),
+    'snapshot_hash': snapshotHash,
+    'compile_plan': compilePlan,
+    'native_src': nativeSrc,
+    'link_template': linkTemplate,
+    'devkitpro': {
+      'devkitARM': devkitPro.devkitARM,
+      'libctru': devkitPro.libctru,
+    },
   };
 }
 
@@ -233,8 +200,10 @@ final class SdkManifest {
   /// segment, the only form a manifest path may take.
   static bool isAssetPath(String path) =>
       !path.startsWith('/') &&
-      !path.contains(r'\') &&
-      !path.split('/').any((part) => part.isEmpty || part == '..');
+      !path.contains(RegExp(r'[\\:\x00-\x1f]')) &&
+      !path
+          .split('/')
+          .any((part) => part.isEmpty || part == '.' || part == '..');
 
   static final _digestPattern = RegExp(r'^[a-f0-9]{64}$');
 }
@@ -275,6 +244,14 @@ final class _JsonObject {
     final String value => value,
     _ => _mistyped(key, 'a string'),
   };
+
+  String assetPath(String key) {
+    final path = string(key);
+    if (!SdkManifest.isAssetPath(path)) {
+      throw FormatException('Invalid SDK asset path for ${_key(key)}: $path');
+    }
+    return path;
+  }
 
   List<String> strings(String key) => switch (_require(key)) {
     final List<Object?> values when values.every((value) => value is String) =>

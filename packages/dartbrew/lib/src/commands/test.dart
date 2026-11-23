@@ -32,6 +32,7 @@ const interruptedExitCode = 130;
 /// [interruptedExitCode]; null [interrupts] watches nothing. [exitProcess]
 /// defaults to flushing standard output and exiting.
 Command<int> testCommand({
+  Map<String, String>? environment,
   ProcessStarter start = startProcess,
   DeviceTransport Function() transport = NetloaderClient.new,
   InternetAddress? listenAddress,
@@ -46,6 +47,7 @@ Command<int> testCommand({
 }) => _TestCommand(
   DeviceRunner(
     start: start,
+    environment: environment,
     transport: transport,
     listenAddress: listenAddress,
     deadlines: deadlines,
@@ -158,6 +160,7 @@ class _TestCommand extends Command<int> {
     final interrupted = json
         ? _interrupts?.call().listen((_) async {
             session.stop();
+            await _runner.interruptBuild();
             await _exitProcess(interruptedExitCode);
           })
         : null;
@@ -168,6 +171,7 @@ class _TestCommand extends Command<int> {
         files,
         names: names,
         plainNames: args.multiOption('plain-name'),
+        reporterHandlesInterrupts: interrupted != null,
       );
     } finally {
       session.stop();
@@ -184,6 +188,7 @@ class _TestCommand extends Command<int> {
     List<String> selected, {
     required List<String> names,
     required List<String> plainNames,
+    required bool reporterHandlesInterrupts,
   }) async {
     final project = settings.project;
     var files = selected;
@@ -205,6 +210,7 @@ class _TestCommand extends Command<int> {
           onOutput: session.addOutput,
           err: _err,
           buildDirectory: 'test',
+          reporterHandlesInterrupts: reporterHandlesInterrupts,
         );
         break;
       } on DartbrewException catch (error) {

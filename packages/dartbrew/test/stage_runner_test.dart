@@ -55,7 +55,12 @@ void main() {
   test('a failing tool throws with the stage name and its log', () async {
     await run('kernel', [], 'kernel');
     await expectLater(
-      run('ld', ['-o', 'app.elf'], 'link'),
+      run(
+        'ld',
+        ['-o', 'app.elf'],
+        'link',
+        executable: p.join(fake.root.path, 'tools', 'ld.dart'),
+      ),
       throwsA(
         isA<StageFailure>()
             .having((e) => e.stage, 'stage', 'link')

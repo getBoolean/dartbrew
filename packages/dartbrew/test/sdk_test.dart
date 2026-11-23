@@ -48,10 +48,12 @@ void main() {
 
   test('SDK load names a missing manifest key', () async {
     final sdk = fakeSdk()
-      ..editManifest((json) => (json['tools']! as Map).remove('ld'));
+      ..editManifest((json) => (json['tools']! as Map).remove('kernel'));
     await expectLater(
       NativeSdk.load(sdk.root.path),
-      _formatError(allOf(contains('`tools.ld`'), contains('update dartbrew'))),
+      _formatError(
+        allOf(contains('`tools.kernel`'), contains('update dartbrew')),
+      ),
     );
   });
 

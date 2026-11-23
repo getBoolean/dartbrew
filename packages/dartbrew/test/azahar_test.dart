@@ -105,6 +105,7 @@ Future<_Run> _run(
   final runner = CommandRunner<int>('dartbrew', '')
     ..addCommand(
       runCommand(
+        environment: sdk.environment,
         start:
             (
               executable,

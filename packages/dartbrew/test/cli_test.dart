@@ -11,10 +11,18 @@ import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 import 'support/fake_sdk.dart';
+import 'support/ctr_build_stubs.dart';
 
 final hostCli = File('bin/dartbrew.dart').absolute.path;
-Future<ProcessResult> invoke(List<String> args, {List<String> vm = const []}) =>
-    Process.run(Platform.resolvedExecutable, [...vm, hostCli, ...args]);
+Future<ProcessResult> invoke(
+  List<String> args, {
+  List<String> vm = const [],
+  Map<String, String>? environment,
+}) => Process.run(Platform.resolvedExecutable, [
+  ...vm,
+  hostCli,
+  ...args,
+], environment: environment);
 
 class _TargetProbe extends Command<int> {
   @override
@@ -99,12 +107,19 @@ void main() {
   );
 
   test('doctor verifies a sealed SDK', () async {
-    final sdk = fakeSdk(tools: {'dart': 0});
-    final result = await invoke(['doctor', '--sdk', sdk.root.path]);
+    final sdk = ctrBuildSdk();
+    final result = await invoke([
+      'doctor',
+      '--sdk',
+      sdk.root.path,
+    ], environment: sdk.environment);
     expect(result.stderr, isEmpty);
     expect(result.exitCode, 0);
     expect(result.stdout, contains('Verified native SDK for '));
-    expect(result.stdout, contains('; 2 assets.'));
+    expect(
+      result.stdout,
+      contains('Qualified: devkitARM r68-1, libctru 2.7.0-1.'),
+    );
   });
 
   test('doctor names a modified file', () async {

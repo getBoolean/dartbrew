@@ -48,10 +48,18 @@ final class NativeSdk {
 
   /// The SDK's `sdk.json`.
   final SdkManifest manifest;
+
+  /// Digest of the exact bytes from which [manifest] was parsed.
+  final String manifestSha256;
   final bool _verifiesOnUse;
   final _verified = <String>{};
 
-  NativeSdk._(this.root, this.manifest, this._verifiesOnUse);
+  NativeSdk._(
+    this.root,
+    this.manifest,
+    this.manifestSha256,
+    this._verifiesOnUse,
+  );
 
   /// Loads the SDK at [directory] and checks its manifest and native host.
   ///
@@ -65,15 +73,19 @@ final class NativeSdk {
   /// is missing.
   static Future<NativeSdk> load(String directory, {bool quick = false}) async {
     final root = Directory(directory).resolveSymbolicLinksSync();
-    final manifest = SdkManifest.fromJson(
-      jsonDecode(await File(p.join(root, 'sdk.json')).readAsString()),
-    );
+    final bytes = await File(p.join(root, 'sdk.json')).readAsBytes();
+    final manifest = SdkManifest.fromJson(jsonDecode(utf8.decode(bytes)));
     if (manifest.host != currentHost()) {
       throw FormatException(
         'SDK is for ${manifest.host}, but this machine is ${currentHost()}.',
       );
     }
-    final sdk = NativeSdk._(root, manifest, !quick);
+    final sdk = NativeSdk._(
+      root,
+      manifest,
+      sha256.convert(bytes).toString(),
+      !quick,
+    );
     if (quick) sdk.tool(SdkTool.dart.key);
     return sdk;
   }

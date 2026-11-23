@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -29,6 +30,7 @@ const defaultHostPort = 17491;
 /// [deadlines], [settle], [azaharHost] and [input]. Program output and the
 /// `--verdict` JSON go to [out]; prompts and messages go to [err].
 Command<int> runCommand({
+  Map<String, String>? environment,
   ProcessStarter start = startProcess,
   DeviceTransport Function() transport = NetloaderClient.new,
   InternetAddress? listenAddress,
@@ -41,6 +43,7 @@ Command<int> runCommand({
 }) => _RunCommand(
   DeviceRunner(
     start: start,
+    environment: environment,
     transport: transport,
     listenAddress: listenAddress,
     deadlines: deadlines,
@@ -220,6 +223,7 @@ final class DeviceRun {
 /// Builds an entrypoint, starts it on a device and streams its records.
 final class DeviceRunner {
   final ProcessStarter start;
+  final Map<String, String>? environment;
 
   /// Creates the network transport that finds consoles and sends apps.
   final DeviceTransport Function() transport;
@@ -245,9 +249,25 @@ final class DeviceRunner {
   final Stream<List<int>> Function()? input;
 
   NativeSdk? _sdk;
+  Future<CtrBuild>? _building;
+  Completer<void>? _buildInterrupt;
+
+  /// Lets a reporter exit only after any interrupted build has released its
+  /// temporary files and compiler processes.
+  Future<void> interruptBuild() async {
+    final interrupt = _buildInterrupt;
+    if (interrupt == null) return;
+    if (!interrupt.isCompleted) interrupt.complete();
+    try {
+      await _building;
+    } on Exception {
+      // The command awaiting the build owns its failure and diagnostics.
+    }
+  }
 
   DeviceRunner({
     this.start = startProcess,
+    this.environment,
     this.transport = NetloaderClient.new,
     this.listenAddress,
     this.deadlines = const RunDeadlines(),
@@ -290,6 +310,7 @@ final class DeviceRunner {
     required void Function(String text) onOutput,
     required StringSink err,
     String buildDirectory = 'run',
+    bool reporterHandlesInterrupts = false,
   }) async {
     // Azahar is found before building, so a missing emulator fails fast.
     final emulator = switch (settings.device) {
@@ -313,7 +334,10 @@ final class DeviceRunner {
     if (output.existsSync()) output.deleteSync(recursive: true);
     final work = Directory(p.join(output.path, 'work'))
       ..createSync(recursive: true);
-    final build = await buildCtrApplication(
+    final interrupt = _buildInterrupt = reporterHandlesInterrupts
+        ? Completer<void>()
+        : null;
+    final future = _building = buildCtrApplication(
       sdk: sdk,
       project: project,
       entry: entry,
@@ -326,7 +350,16 @@ final class DeviceRunner {
       offline: settings.offline,
       start: start,
       warnings: err,
+      environment: environment,
+      nativeInterrupts: interrupt?.future.asStream(),
     );
+    final CtrBuild build;
+    try {
+      build = await future;
+    } finally {
+      _building = null;
+      _buildInterrupt = null;
+    }
 
     final ServerSocket listener;
     try {

@@ -85,6 +85,7 @@ Future<_Result> _test(
   final runner = CommandRunner<int>('dartbrew', '')
     ..addCommand(
       testCommand(
+        environment: sdk.environment,
         start: start,
         transport: transport,
         listenAddress: InternetAddress.loopbackIPv4,
@@ -97,6 +98,7 @@ Future<_Result> _test(
     )
     ..addCommand(
       runCommand(
+        environment: sdk.environment,
         start: start,
         transport: transport,
         listenAddress: InternetAddress.loopbackIPv4,
@@ -345,6 +347,56 @@ void main() {
       );
       expect(lastEvent('$out'), containsPair('type', 'done'));
       expect(lastEvent('$out'), containsPair('success', false));
+    });
+
+    test('interrupting native compilation cleans staging before exit', () async {
+      final project = _project({'test/a_test.dart': _testFile});
+      final interrupts = StreamController<Object?>();
+      addTearDown(interrupts.close);
+      final exit = Completer<({int code, bool staged})>();
+      Directory? staging;
+      final result = await _test(
+        project,
+        ['-r', 'json'],
+        interrupts: () => interrupts.stream,
+        exitProcess: (code) async {
+          exit.complete((code: code, staged: staging!.existsSync()));
+        },
+        start:
+            (
+              exe,
+              args, {
+              workingDirectory,
+              environment,
+              mode = ProcessStartMode.normal,
+            }) async {
+              if (args.length == 1 &&
+                  args.single.startsWith('@') &&
+                  staging == null) {
+                final response = File(args.single.substring(1));
+                staging = response.parent.parent;
+                final script = File(p.join(project, 'pending.dart'))
+                  ..writeAsStringSync(
+                    'Future<void> main() => Future<void>.delayed(const Duration(seconds: 20));',
+                  );
+                final child = await Process.start(Platform.resolvedExecutable, [
+                  script.path,
+                ]);
+                interrupts.add(null);
+                return child;
+              }
+              return startBuildStub(
+                exe,
+                args,
+                workingDirectory: workingDirectory,
+                environment: environment,
+                mode: mode,
+              );
+            },
+      );
+      expect(result.code, 130);
+      expect(await exit.future, (code: 130, staged: false));
+      expect(lastEvent(result.out), containsPair('type', 'done'));
     });
 
     test('when the user interrupts the run, then exits 130', () async {

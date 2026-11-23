@@ -6,9 +6,12 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:yaml/yaml.dart';
 
+import '../../devkitpro.dart';
 import '../../process.dart';
 import '../../sdk.dart';
 import '../../stage_runner.dart';
+import 'link_template.dart';
+import 'native_build.dart';
 import 'native_elf.dart';
 import 'smdh.dart';
 
@@ -156,6 +159,8 @@ Future<CtrBuild> buildCtrApplication({
   bool offline = false,
   ProcessStarter start = startProcess,
   StringSink? warnings,
+  Map<String, String>? environment,
+  Stream<Object?>? nativeInterrupts,
 }) async {
   final smdh = projectSmdh(
     project,
@@ -163,6 +168,11 @@ Future<CtrBuild> buildCtrApplication({
     warnings: warnings ?? stderr,
   );
   final run = StageRunner(sdk, work, start: start);
+  final devkitPro = await DevkitPro.discover(
+    environment: environment,
+    start: start,
+  );
+  final advice = devkitPro.mismatchAdvice(sdk.manifest.runtime.devkitPro);
   final aot = mode == BuildMode.aot;
 
   final packageConfig = File(p.join(project, '.dart_tool/package_config.json'));
@@ -206,7 +216,7 @@ Future<CtrBuild> buildCtrApplication({
   };
   final compatibility = profile.compatibility;
   final payloadHash = await fileDigest(File(aot ? assembly.path : kernel));
-  final sdkHash = await fileDigest(File(p.join(sdk.root, 'sdk.json')));
+  final sdkHash = sdk.manifestSha256;
   final buildId = sha256
       .convert(
         utf8.encode(jsonEncode([sdkHash, mode.name, fixture, payloadHash])),
@@ -223,46 +233,54 @@ Future<CtrBuild> buildCtrApplication({
       ),
     );
   for (final source in [assembly, program]) {
-    await run('as', [
-      '-march=armv6k',
-      '-mfpu=vfp',
-      '-mfloat-abi=hard',
-      source.path,
-      '-o',
-      p.setExtension(source.path, '.o'),
-    ], 'assemble-${p.basenameWithoutExtension(source.path)}');
+    await run(
+      'as',
+      [
+        '-march=armv6k',
+        '-mfpu=vfp',
+        '-mfloat-abi=hard',
+        source.path,
+        '-o',
+        p.setExtension(source.path, '.o'),
+      ],
+      'assemble-${p.basenameWithoutExtension(source.path)}',
+      executable: devkitPro.tool('as'),
+      failureAdvice: advice,
+    );
   }
-  final link = runtime.link;
   final elf = File(p.join(work.path, 'application.elf'));
-  await run('ld', [
-    '--defsym=__sync_synchronize=__sync_synchronize_cp15dmb',
-    '-X',
-    '-T',
-    sdk.asset(link.layout),
-    '-d',
-    '--emit-relocs',
-    '--use-blx',
-    '--gc-sections',
-    '-u',
-    '__sync_synchronize_cp15dmb',
-    '-Map=${p.join(work.path, 'link.map')}',
-    '-o',
-    elf.path,
-    ...link.startup.map(sdk.asset),
-    ...profile.objects.map(sdk.asset),
-    p.join(work.path, 'program.o'),
-    p.join(work.path, 'payload.o'),
-    sdk.asset(link.math),
-    // The SDK's dart:io layer for CTR: the launcher calls into it, and it
-    // calls the VM in the runtime archive.
-    sdk.asset(profile.ioArchive),
-    sdk.asset(profile.archive),
-    ...link.libraries.map(sdk.asset),
-    '--start-group',
-    ...link.grouped.map(sdk.asset),
-    '--end-group',
-    ...link.end.map(sdk.asset),
-  ], 'link');
+  final native =
+      await NativeBuild(
+        sdk: sdk,
+        devkitPro: devkitPro,
+        environment: environment,
+        start: start,
+      ).build(
+        mode: mode.name,
+        sdkManifestSha256: sdkHash,
+        interrupts: nativeInterrupts,
+      );
+  final linkArguments = await ctrLinkArguments(
+    runtime.linkTemplate,
+    launcher: native.launcherObjects,
+    outputs: {
+      'map': p.join(work.path, 'link.map'),
+      'elf': elf.path,
+      'program': p.join(work.path, 'program.o'),
+      'payload': p.join(work.path, 'payload.o'),
+      'soft_math': native.softMath,
+      'io': native.ioArchive,
+      'runtime': native.runtimeArchive,
+    },
+    targetFile: devkitPro.targetFile,
+  );
+  await run(
+    'ld',
+    linkArguments,
+    'link',
+    executable: devkitPro.tool('ld'),
+    failureAdvice: advice,
+  );
   final artifact = encode3dsx(elf.readAsBytesSync(), smdh: smdh);
   application.writeAsBytesSync(artifact);
   return CtrBuild(

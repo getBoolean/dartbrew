@@ -14,6 +14,12 @@ final payloadDigest = sha256.convert(utf8.encode(payload)).toString();
 class FakeSdk {
   final Directory root;
   FakeSdk._(this.root);
+  Map<String, String> get environment => {
+    'DEVKITPRO': p.join(root.path, 'devkitPro'),
+    'DEVKITARM': '',
+    for (final variable in ['LOCALAPPDATA', 'XDG_CACHE_HOME', 'HOME'])
+      variable: p.join(root.path, 'user-cache'),
+  };
 
   /// Every argument list the stub for [tool] was started with, in order.
   List<List<String>> calls(String tool) {
@@ -38,27 +44,14 @@ class FakeSdk {
 /// when a test adds them as assets, as [ctrBuildSdk] does.
 final fakeRuntime = SdkRuntime(
   sdkHead: 'head',
+  snapshotHash: 'f' * 32,
+  compilePlan: 'compile-plan.json',
+  nativeSrc: 'native-src',
   platform: 'runtime/platform.dill',
-  aot: RuntimeMode(
-    compatibility: 'a' * 64,
-    objects: ['runtime/aot.o'],
-    archive: 'runtime/aot.a',
-    ioArchive: 'runtime/aot-io.a',
-  ),
-  jit: RuntimeMode(
-    compatibility: 'b' * 64,
-    objects: ['runtime/jit.o'],
-    archive: 'runtime/jit.a',
-    ioArchive: 'runtime/jit-io.a',
-  ),
-  link: LinkPlan(
-    layout: 'runtime/layout.ld',
-    math: 'runtime/libm.a',
-    startup: ['runtime/crt0.o'],
-    libraries: ['runtime/libctru.a'],
-    grouped: ['runtime/libc.a'],
-    end: ['runtime/crtend.o'],
-  ),
+  aot: RuntimeMode(compatibility: 'a' * 64),
+  jit: RuntimeMode(compatibility: 'b' * 64),
+  linkTemplate: ctrLinkTemplate,
+  devkitPro: const DevkitProVersions(devkitARM: 'r68-1', libctru: '2.7.0-1'),
 );
 
 /// Writes a minimal SDK with one sealed asset, `bin/tool`, whose manifest

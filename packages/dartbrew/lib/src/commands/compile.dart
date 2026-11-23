@@ -27,12 +27,16 @@ class CompileCommand extends Command<int> {
   String get invocation => 'dartbrew compile [arguments] <entry.dart>';
 
   final ProcessStarter _start;
+  final Map<String, String>? environment;
   final IOSink? _out;
 
   /// [out] receives the success message; it defaults to standard output.
-  CompileCommand({ProcessStarter start = startProcess, IOSink? out})
-    : _start = start,
-      _out = out {
+  CompileCommand({
+    ProcessStarter start = startProcess,
+    IOSink? out,
+    this.environment,
+  }) : _start = start,
+       _out = out {
     addTargetOption(argParser);
     argParser
       ..addOption(
@@ -115,6 +119,7 @@ class CompileCommand extends Command<int> {
       application: File(p.join(output.path, 'application.3dsx')),
       offline: args.flag('offline'),
       start: _start,
+      environment: environment,
     );
     packageCtrApplication(sdk, build, output);
     final out = _out ?? stdout;

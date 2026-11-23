@@ -80,6 +80,7 @@ Future<_Run> _run(
   final runner = CommandRunner<int>('dartbrew', '')
     ..addCommand(
       runCommand(
+        environment: sdk.environment,
         start: startBuildStub,
         transport: () => transport,
         listenAddress: InternetAddress.loopbackIPv4,
@@ -399,6 +400,7 @@ void main() {
     final runner = CommandRunner<int>('dartbrew', '')
       ..addCommand(
         runCommand(
+          environment: sdk.environment,
           start: startBuildStub,
           transport: () => _loopbackClient(port: console.port),
           listenAddress: InternetAddress.loopbackIPv4,
@@ -452,6 +454,7 @@ void main() {
     final runner = CommandRunner<int>('dartbrew', '')
       ..addCommand(
         runCommand(
+          environment: sdk.environment,
           start:
               (
                 executable,
