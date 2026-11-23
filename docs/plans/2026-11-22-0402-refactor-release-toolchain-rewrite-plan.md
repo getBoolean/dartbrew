@@ -127,7 +127,7 @@ A maintainability audit (session 2026-11-22) found dead launcher fallbacks, thre
 - KTD13. **Long output lines are split by the launcher.** `report.cc` emits a stdout or stderr record whenever its buffer reaches a fixed chunk size, marking it as a continuation, so no record exceeds the host's 64 KiB line limit and device memory stays bounded. The chunk size lives in `runtime/ctr/source/report.h`. A long-line vector in `packages/dartbrew/test/data/verdict_vectors.json` is read by both `verdict_test.dart` and `runtime/ctr/test/report_test.cc`, so a change on either side fails a test. (Governs R15.)
 - KTD14. **Python file fates follow the 2026-11-22 classification** (Appendix, Python inventory), with these corrections: `test_ctr_native_offsets.py` is a production step and moves into `build_runtime`; `test_toolchain.py`'s identity tests move to Dart with `build_sdk`; `test_host_vm.py` ports to a gated Dart test before `results.py` is deleted; `native_binutils.py`, `native_clang.py` and their producers are deleted outright rather than rewritten.
 - KTD15. **FFIgen gets libclang from the user's LLVM install.** The homebrew FFI package ships pre-generated bindings, so most users never run FFIgen. (session-settled: user-directed — chosen over bundling libclang.) Recorded here because U20 rewrites the full-compatibility plan's KTD17 and U23 to match.
-- KTD16. **One `DevkitPro` type in dartbrew owns finding and querying the install.** It resolves the install root from `DEVKITPRO`/`DEVKITARM`, then the default locations (`/opt/devkitpro`; `C:\devkitPro` on Windows, where `DEVKITPRO` is often an MSYS-style `/opt/devkitpro` that must map to the Windows root). It exposes the tools (`arm-none-eabi-as`, `-ld`, `-gcc`, `-g++`, `-objcopy`), resolves each target file by asking `arm-none-eabi-gcc <ctr cflags> -print-file-name=<name>` (the same query `freeze_runtime.py` uses today), and reports the installed versions: devkitARM from `gcc --version` (`devkitARM release N`), libctru from `dkp-pacman -Q libctru` with `pacman` as fallback, unknown if neither works. Nothing else in dartbrew builds a devkitPro path. (Governs R1, R3, R4.)
+- KTD16. **One `DevkitPro` type in dartbrew owns finding and querying the install.** It resolves the install root from `DEVKITPRO`/`DEVKITARM`, then the default locations (`/opt/devkitpro`; `C:\devkitPro` on Windows, where `DEVKITPRO` is often an MSYS-style `/opt/devkitpro` that must map to the Windows root). It exposes the tools (`arm-none-eabi-as`, `-ld`, `-gcc`, `-g++`, `-objcopy`), resolves each target file by asking `arm-none-eabi-gcc <ctr cflags> -print-file-name=<name>` (the same query `freeze_runtime.py` uses today), and reports the installed versions: query `devkitARM` and `libctru` with `dkp-pacman -Q` or the bundled `pacman -Q`. Report unknown when a package version is unavailable. Nothing else in dartbrew builds a devkitPro path. (Governs R1, R3, R4.)
 - KTD17. **Version policy.** `runtime.json`, and from it `sdk.json`, records the devkitARM release and libctru version the release was qualified with. `doctor` prints installed against qualified versions. Builds do not warn; when a native compile or `ld` fails, the error adds both version sets and "update dartbrew or devkitPro". (session-settled: user-approved — never refuse; governs R4.)
 - KTD18. **Soft-math is part of the native build.** It is derived from devkitARM's soft-float `libm.a`, so it cannot ship (R2). The native build compiles `toolchain/soft_math_bridge.cc` (shipped as source), processes the user's `libm.a` with `objcopy` and `ld -r` from the user's devkitARM, and runs the existing symbol and attribute validation. The linker script and startup code (`3dsx.ld`, `3dsx_crt0.o`) come from the user's install; the repository copies in `release/target-sources/` are deleted. (Governs R1, R2.)
 - KTD19. **The producer container stays devkitPro's official image.** `compose.yaml` keeps `devkitpro/devkitarm` pinned by digest in `toolchain/versions.json`; using devkitPro's own distribution channel is not redistribution. The container builds the patched SDK, generates the compile plan, and proves it with a full native build and probe link before release. (Governs R2.)
@@ -232,6 +232,10 @@ flowchart TB
 
 ## Implementation Units
 
+### Implementation status at U21
+
+U2 through U9, U14 and U16 are committed. U21 passed the Windows AOT spike below. U22 and U23 are next, followed by U13 and U15 for SDK assembly, U17 and U18 for the patch queue, and U19 and U20 for qualification and documentation. The Windows spike qualifies one hello build. Three-host SDK and physical-console qualification remain open.
+
 ### Unit Index
 
 | U-ID | Title | Key files | Depends on |
@@ -275,11 +279,15 @@ flowchart TB
 **Test scenarios:**
 - Every compile in the captured AOT plan succeeds with the local devkitARM g++ without `-Werror`.
 - Command lines over Windows' length limit go through response files and succeed.
-- `DEVKITPRO` set to `/opt/devkitpro` (MSYS form) still resolves to `C:\devkitPro`.
+- `DEVKITPRO` set to `/opt/devkitpro` (MSYS form) resolves to the native install path, including a non-default drive.
 - The offsets checked by `freeze_runtime.py`'s native-offsets step hold for objects compiled on Windows.
 - hello AOT prints `test/expected/hello.txt` on Azahar and the verdict is pass.
 
 **Verification:** hello AOT passes on Azahar from a Windows-compiled runtime, and the measured first-build time is recorded in the plan; otherwise a stop condition applies.
+
+**Windows result (branch HEAD `e138344`).** The scratch source bundle built on 16 logical processors with devkitARM r68-1 (GCC 16.1.0) and libctru 2.7.1-1. Compiling 505 VM, 130 I/O and 10 launcher units and archiving the VM and I/O objects took 186.234 seconds. This interval excludes bundle preparation, the separate soft-math and offset checks, application linking and emulator startup. The local soft-float libm passed the existing component audit, all 483 native layout constants matched, and a compile with a 44,755-character argument list succeeded through a response file.
+
+The dev SDK generated the hello snapshot. The local linker used the Windows-built objects, local startup files, linker script and libraries. Azahar 2126.2 printed `hello:42`, matching `test/expected/hello.txt`. The launcher journal recorded cleanup and terminal passes for run `13bfe2ae6c5fcb02d8d16d449c5673c7`, artifact SHA-256 `7f829c3faba55a6b3ade747665d7eb087c4a9e36b4341816765a7b1aa8817a26`. The first emulator attempt lost the connection with its configuration staged on a different SD card. The passing run used a portable emulator profile and its own SD card.
 
 ### U22. `DevkitPro` in dartbrew
 
@@ -297,6 +305,7 @@ flowchart TB
 
 **Approach:**
 - KTD16 for discovery and queries, KTD17 for the version display and failure messages.
+- Account for the Windows installation measured in U21. The updater registry entry contains the native installation path. Its bundled `cygpath -aw /opt/devkitpro` resolves to `B:\tools\devkitPro`. On this install the GCC banner gives the compiler version only. Read both package releases with the bundled `pacman -Q devkitARM libctru`.
 - The SDK's `tools.as` and `tools.ld` go away.
 
 **Patterns to follow:** `lib/src/process.dart` `ProcessStarter` seam for the `gcc` and `dkp-pacman` queries.
@@ -743,7 +752,7 @@ flowchart TB
 - Create: `docs/qualification/0.1.0-preview.5/results.json` (draft; console results pending)
 
 **Approach:**
-- Run every `test/programs` program with `dartbrew test -d azahar` and record the results, including the devkitARM and libctru versions `doctor` reports.
+- Run each standalone entry in `test/programs` with `dartbrew run -d azahar --mode aot`, compare its stdout with its expected file, and record its terminal verdict and the devkitARM and libctru versions from `doctor`.
 - Follow the new release steps end to end on windows-x64, linux-x64 and macos-arm64 (Mac with the user), each with a current devkitPro install, and check macOS Gatekeeper on the Mac.
 
 **Test scenarios:**
@@ -784,7 +793,7 @@ flowchart TB
 | SDK host tests | `make -C runtime/ctr sdk-host-test` in `ctr-dart-toolchain` | U3, U17 |
 | Bootstrap tests | `python -m unittest discover -s toolchain/test` | U8 |
 | Barrier and mnemonic check | `make -C runtime/ctr barrier-check RUNTIME=<archive>` (run by `build_runtime`) | U13, U19 |
-| Device programs | `dartbrew test -d azahar` over `test/programs` | U21, U23, U17, U19 |
+| Device programs | `dartbrew run -d azahar --mode aot` per standalone entry, compare stdout with `test/expected` and require a passing verdict | U21, U23, U17, U19 |
 | Console programs | the same on the console, per `.claude/skills/driving-ctr-console/SKILL.md` | before publishing |
 | Release gate | `dart run release_tools:check_release --results docs/qualification/<version>/results.json <zips>` | U19 |
 
