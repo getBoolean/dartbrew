@@ -2,7 +2,7 @@ os:ctr
 environment:0
 processors:true
 locale:true
-hostname:3ds
+hostname:ctr
 os-version:true
 version:true
 executable:true

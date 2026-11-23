@@ -9,7 +9,7 @@ TEST_TIMEOUT = timeout 20
 HOST_FLAGS = -std=c++20 -Wall -Wextra -Werror -pthread -Isource
 # Journal vectors shared with the host's verdict tests.
 VERDICT_VECTORS = ../../packages/dartbrew/test/data/verdict_vectors.json
-SOURCES = source/embedder.cc source/lifecycle.cc source/timer_worker.cc source/report.cc source/link.cc source/unsupported.cc source/keyboard.cc source/stdin_source.cc source/storage.cc
+SOURCES = source/embedder.cc source/lifecycle.cc source/report.cc source/link.cc source/keyboard.cc source/stdin_source.cc source/storage.cc
 # Host stand-ins for libctru that the SDK host tests compile SDK sources against.
 SDK_FIXTURES = ../../toolchain/test
 SDK_VM_FLAGS = -std=c++20 -D__3DS__ -DDEBUG
@@ -27,8 +27,6 @@ check-sdk:
 
 # Launcher tests that need only a host C++ compiler.
 host-test: build-dir
-	$(CXX) $(HOST_FLAGS) test/timer_worker_test.cc source/timer_worker.cc -o "$(BUILD)/timer_worker_test"
-	$(TEST_TIMEOUT) "$(BUILD)/timer_worker_test"
 	$(CXX) $(HOST_FLAGS) test/lifecycle_test.cc source/lifecycle.cc -o "$(BUILD)/lifecycle_test"
 	$(TEST_TIMEOUT) "$(BUILD)/lifecycle_test"
 	$(CXX) $(HOST_FLAGS) test/report_test.cc source/report.cc -o "$(BUILD)/report_test"
@@ -45,12 +43,11 @@ host-test: build-dir
 # Host tests of launcher and SDK sources that need the patched SDK checkout.
 sdk-host-test: check-sdk build-dir
 	$(CXX) $(HOST_FLAGS) -I"$(SDK)/runtime/include" -c source/embedder.cc -o "$(BUILD)/embedder.o"
-	$(CXX) $(HOST_FLAGS) -I"$(SDK)/runtime/include" -c source/unsupported.cc -o "$(BUILD)/unsupported.o"
-	# The dart:io event handler's poll set (patch 0035).
+	# The dart:io event handler's poll set.
 	$(CXX) $(HOST_FLAGS) -DDART_CTR_POLL_HOST_TEST -I"$(SDK)/runtime" test/eventhandler_host_test.cc \
 	  "$(SDK)/runtime/bin/eventhandler_ctr_poll.cc" -o "$(BUILD)/eventhandler_host_test"
 	$(TEST_TIMEOUT) "$(BUILD)/eventhandler_host_test"
-	# The dart:io path model (patch 0036).
+	# The dart:io path model.
 	$(CXX) $(HOST_FLAGS) -DDART_CTR_PATH_HOST_TEST -I"$(SDK)/runtime" test/path_host_test.cc \
 	  "$(SDK)/runtime/bin/path_ctr.cc" -o "$(BUILD)/path_host_test"
 	$(TEST_TIMEOUT) "$(BUILD)/path_host_test"
@@ -114,12 +111,11 @@ barrier-check:
 	    { echo "CP15 data memory barrier absent from $(RUNTIME)" >&2; exit 1; }; } && \
 	  echo "PASS barrier-check $(RUNTIME)"
 
-# Link the integration driver with the SDK's successfully linked host VM.
-# VM_BUILD must already contain libdart_jit.so; this does not rebuild it.
+# The host driver links the SDK embedder archive for the native dart:io backend.
 host-vm: check-sdk build-dir
 	@test -n "$(VM_BUILD)"
-	@test -f "$(VM_BUILD)/libdart_jit.so"
+	"$(SDK)/buildtools/ninja/ninja" -C "$(VM_BUILD)" obj/runtime/bin/libdart_embedder_runtime_jit.a
 	$(CXX) -std=c++20 -Wall -Wextra -Werror -pthread -rdynamic \
 	  -I"$(abspath source)" -I"$(SDK)/runtime/include" \
 	  "$(abspath test/host_vm_test.cc)" $(foreach src,$(SOURCES),"$(abspath $(src))") \
-	  -L"$(VM_BUILD)" -Wl,-rpath,"$(VM_BUILD)" -ldart_jit -o "$(BUILD)/host_vm_test"
+	  "$(VM_BUILD)/obj/runtime/bin/libdart_embedder_runtime_jit.a" -L"$(VM_BUILD)" -Wl,-rpath,"$(VM_BUILD)" -ldart_jit -ldl -o "$(BUILD)/host_vm_test"

@@ -16,7 +16,6 @@ struct Application {
   virtual bool Bootstrap() = 0;
   virtual bool HasLivePorts() = 0;
   virtual bool HandleMessage() = 0;
-  virtual void StopTimers() = 0;
   virtual void ShutdownIsolate() = 0;
 };
 class Runner {

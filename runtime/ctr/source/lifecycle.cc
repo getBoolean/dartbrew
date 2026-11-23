@@ -43,7 +43,6 @@ Completion Runner::Run(Application& app, int (*read_exit_code)()) {
 }
 void Runner::Shutdown(Application& app) {
   if (shutdown_) return;
-  app.StopTimers();
   app.ShutdownIsolate();
   shutdown_ = true;
 }

@@ -1,7 +1,6 @@
 #include "lifecycle.h"
 #include <cassert>
 #include <optional>
-#include <vector>
 
 struct VM : ctr::Application {
   bool bootstrap = true, live = true, error = false;
@@ -11,7 +10,7 @@ struct VM : ctr::Application {
   int exit_at = 0;
   int64_t exit_code = 0;
   ctr::Runner* runner = nullptr;
-  std::vector<int> cleanup;
+  int shutdowns = 0;
   bool Bootstrap() override { return bootstrap; }
   bool HasLivePorts() override { return live; }
   bool HandleMessage() override {
@@ -23,8 +22,7 @@ struct VM : ctr::Application {
     if (messages == 2) live = false;
     return !error;
   }
-  void StopTimers() override { cleanup.push_back(1); }
-  void ShutdownIsolate() override { cleanup.push_back(2); }
+  void ShutdownIsolate() override { ++shutdowns; }
 };
 // dart:io's exitCode as the program left it.
 int exit_code_setting = 0;
@@ -40,13 +38,13 @@ int main() {
   runner.Notify(); runner.Notify();
   assert(Is(runner.Run(vm, ExitCodeSetting), ctr::Outcome::pass));
   assert(vm.messages == 2);
-  assert((vm.cleanup == std::vector<int>{1, 2}));
+  assert(vm.shutdowns == 1);
   runner.Shutdown(vm);
-  assert(vm.cleanup.size() == 2);
+  assert(vm.shutdowns == 1);
   ctr::Runner failed;
   VM partial; partial.bootstrap = false;
   assert(Is(failed.Run(partial, ExitCodeSetting), ctr::Outcome::fail));
-  assert((partial.cleanup == std::vector<int>{1, 2}));
+  assert(partial.shutdowns == 1);
   ctr::Runner uncaught;
   VM bad; bad.error = true; uncaught.Notify();
   assert(Is(uncaught.Run(bad, ExitCodeSetting), ctr::Outcome::fail));
@@ -62,7 +60,7 @@ int main() {
   exiting.Notify(); exiting.Notify(); exiting.Notify();
   assert(Is(exiting.Run(zero, ExitCodeSetting), ctr::Outcome::pass, 0));
   assert(zero.messages == 1 && exiting.exited());
-  assert((zero.cleanup == std::vector<int>{1, 2}));
+  assert(zero.shutdowns == 1);
   // Any other code fails carrying the code.
   ctr::Runner failing;
   VM three; three.runner = &failing; three.exit_at = 1; three.exit_code = 3;

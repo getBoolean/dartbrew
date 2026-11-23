@@ -1,4 +1,4 @@
-// The dart:io path model on CTR (SDK patch 0036, runtime/bin/path_ctr.cc).
+// The dart:io path model on CTR (runtime/bin/path_ctr.cc).
 #include "bin/path_ctr.h"
 #include <cassert>
 #include <cstring>

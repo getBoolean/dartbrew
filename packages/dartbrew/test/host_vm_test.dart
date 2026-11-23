@@ -196,42 +196,25 @@ void main() {
         expect(output, contains('application.dart'));
       });
 
-      // Two natives in one run: each message must name its own native. The
-      // first native File reaches is an SDK detail and may change on SDK
-      // bumps.
-      Future<void> expectCatchableUnsupportedIo({String? vmFlag}) async {
-        final run = await runProgram(r'''
+      for (final flag in [null, '--link_natives_lazily']) {
+        test('dart:io reads its own file with VM flag $flag', () async {
+          final run = await runProgram(r'''
 import 'dart:io';
 void main() {
-  try { File('x').readAsStringSync(); } on UnsupportedError catch (e) { print('file: $e'); }
-  try { exit(3); } on UnsupportedError catch (e) { print('exit: $e'); }
-  print('after');
+  final dir = Directory.systemTemp.createTempSync();
+  try {
+    final file = File('${dir.path}/probe')..writeAsStringSync('io-ready');
+    print(file.readAsStringSync());
+  } finally {
+    dir.deleteSync(recursive: true);
+  }
 }
-''', vmFlag: vmFlag);
-        expect(run.exitCode, 0);
-        expect(run.verdict.outcome, Outcome.pass);
-        expect(run.verdict.output, [
-          'file: Unsupported operation: Namespace_GetDefault is not supported '
-              'on CTR (dart:io)',
-          'exit: Unsupported operation: Process_Exit is not supported on CTR '
-              '(dart:io)',
-          'after',
-        ]);
+''', vmFlag: flag);
+          expect(run.exitCode, 0);
+          expect(run.verdict.outcome, Outcome.pass);
+          expect(run.verdict.output, ['io-ready']);
+        });
       }
-
-      // JIT resolves natives at compile time; without a resolver that is a
-      // compile error.
-      test(
-        'an unsupported dart:io native throws a catchable error',
-        expectCatchableUnsupportedIo,
-      );
-
-      // AOT links natives at first call, where a missing native aborts the VM.
-      test(
-        'an unsupported dart:io native throws a catchable error when natives '
-        'link lazily',
-        () => expectCatchableUnsupportedIo(vmFlag: '--link_natives_lazily'),
-      );
 
       // The SDK's ordinary VM platform has no private CTR library.
       test(

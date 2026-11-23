@@ -10,7 +10,7 @@
 #include "input.h"
 #include "keyboard.h"
 #include "link.h"
-#include "priorities.h"
+#include "ctr/thread_priorities.h"
 #include "stdin_source.h"
 #include "storage.h"
 #include "vm/os.h"
@@ -169,7 +169,7 @@ int main(int argc, char** argv) {
       } else {
         bool input_lost = false;
         Thread keepalives = threadCreate(SendKeepalives, &run, 4 * 1024,
-                                         ctr::kServicePriority, 0, false);
+                                         dart::ctr::kServicePriority, 0, false);
         // Stopping also ends stdin, so a program blocked reading it returns.
         while (!run.done.load(std::memory_order_acquire)) {
           if (!aptMainLoop()) { run.runner.RequestStop(); standard_input.Stop(); }

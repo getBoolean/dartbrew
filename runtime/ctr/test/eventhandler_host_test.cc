@@ -1,5 +1,4 @@
-// Host build of the CTR event handler's poll set (SDK patch 0035,
-// runtime/bin/eventhandler_ctr_poll.cc). Plain host sockets with the host's
+// Host build of the CTR event handler's poll set (runtime/bin/eventhandler_ctr_poll.cc). Plain host sockets with the host's
 // poll() stand in for dart:io sockets; this is not a console check.
 #include "bin/eventhandler_ctr_poll.h"
 #include <arpa/inet.h>
