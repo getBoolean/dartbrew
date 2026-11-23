@@ -148,7 +148,13 @@ List<String> releaseProblems(
         'the ${host.id} record names ${record['sdk_archive']}, not $archive',
       );
     }
+    if (records.containsKey(archive)) {
+      problems.add('duplicate qualification record for host ${host.id}');
+    }
     records[archive] = record;
+    if (record['result'] != 'pass') {
+      problems.add('$archive did not pass qualification');
+    }
   }
   for (final host in Host.values) {
     if (!records.containsKey(sdkArchiveName(version, host))) {
@@ -157,15 +163,20 @@ List<String> releaseProblems(
   }
 
   if (archives.isEmpty) problems.add('no archives given');
+  final supplied = <String>{};
   for (final (:name, :sha256) in archives) {
+    if (!supplied.add(name)) problems.add('duplicate archive $name');
     final record = records[name];
     if (record == null) {
       problems.add('$name has no qualification record for $version');
-    } else if (record['result'] != 'pass') {
-      problems.add('$name did not pass qualification');
     } else if (record['sdk_sha256'] != sha256) {
       problems.add('$name differs from the qualified bytes');
     }
+  }
+
+  for (final host in Host.values) {
+    final name = sdkArchiveName(version, host);
+    if (!supplied.contains(name)) problems.add('missing archive $name');
   }
 
   switch (results['features']) {
@@ -183,15 +194,25 @@ List<String> _featureProblems(Map<String, Object?> feature) {
   final outcomes = feature['results'] as Map<String, Object?>? ?? const {};
   return [
     for (final environment in QualificationEnvironment.values)
-      if (!_isQualified(outcomes[environment.key]))
+      if (!_isQualified(
+        feature['name'],
+        environment,
+        outcomes[environment.key],
+      ))
         'feature ${feature['name']} did not pass on ${environment.key}: '
             '${jsonEncode(outcomes[environment.key])}',
   ];
 }
 
-bool _isQualified(Object? outcome) => switch (outcome) {
+bool _isQualified(
+  Object? feature,
+  QualificationEnvironment environment,
+  Object? outcome,
+) => switch (outcome) {
   'pass' => true,
   {'result': 'not_applicable', 'reason': final String reason} =>
-    reason.trim().isNotEmpty,
+    environment == QualificationEnvironment.azaharAot &&
+        const {'runtime loader', 'jit-only'}.contains(feature) &&
+        reason.trim().isNotEmpty,
   _ => false,
 };

@@ -25,7 +25,7 @@ void main() {
           fakeSdk(files: {'bin/tool': payloadDigest.toUpperCase()}).root,
       'another native host': () => fakeSdk(host: 'plan9-x64').root,
       'an unknown schema': () =>
-          (fakeSdk()..editManifest((json) => json['schema'] = 2)).root,
+          (fakeSdk()..editManifest((json) => json['schema'] = 99)).root,
       'no sealed assets': () => fakeSdk(files: {}).root,
       'an absolute asset path': () =>
           fakeSdk(files: {'/bin/tool': payloadDigest}).root,

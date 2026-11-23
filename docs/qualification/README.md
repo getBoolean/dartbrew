@@ -27,9 +27,10 @@ Other fields (build provenance, notes) are free-form records for people.
 - `azahar_aot`: AOT app in Azahar.
 
 Each result is `"pass"`, `"fail"`, or
-`{"result": "not_applicable", "reason": "..."}`. Use `not_applicable` only where
-the environment cannot provide the feature, and say why. Azahar cannot run the
-JIT VM or the runtime `.so` loader. Everything else must be `pass`.
+`{"result": "not_applicable", "reason": "..."}`. Both console environments
+require `pass` for every feature. Azahar AOT permits `not_applicable` for the
+features named `jit-only` and `runtime loader`, with a reason explaining the
+emulator limitation. Every other Azahar result must be `pass`.
 
 ```json
 "features": [

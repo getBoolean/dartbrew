@@ -131,7 +131,7 @@ final class SdkRuntime {
 /// separators, and names a sealed file in [files].
 final class SdkManifest {
   /// The manifest format this dartbrew reads and writes.
-  static const schema = 1;
+  static const schema = 2;
 
   /// The host the SDK runs on, such as `windows-x64`.
   final String host;

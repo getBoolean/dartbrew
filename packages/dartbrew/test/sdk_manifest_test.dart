@@ -6,7 +6,7 @@ import 'package:test/test.dart';
 /// An `sdk.json` in the shape the current SDK bundler writes, trimmed to a
 /// few files.
 Map<String, Object?> _installedShape() => {
-  'schema': 1,
+  'schema': 2,
   'version': '0.1.0-preview.5',
   'host': 'windows-x64',
   'tools': {
@@ -46,6 +46,18 @@ void main() {
     expect(manifest.runtime.linkTemplate, ['-o', '{elf}', '{runtime}']);
     expect(manifest.runtime.devkitPro.libctru, '2.7.0-1');
     expect(manifest.files[manifest.runtime.compilePlan], 'd' * 64);
+  });
+
+  test('legacy prebuilt SDKs are rejected before reading runtime fields', () {
+    expect(
+      () => SdkManifest.fromJson({'schema': 1}),
+      _formatError(
+        allOf(
+          contains('schema 1 is not supported'),
+          contains('update dartbrew'),
+        ),
+      ),
+    );
   });
 
   test('a manifest written and read back is equal', () {

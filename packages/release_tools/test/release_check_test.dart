@@ -102,25 +102,58 @@ void main() {
     ]);
   });
 
-  test('a subset of the qualified archives passes', () async {
-    expect(await check(qualifiedResults(), [fixture.archive('linux-x64')]), [
-      'dartbrew-$version-linux-x64.zip',
-    ]);
+  test(
+    'a partial release reports missing archives and failed host records',
+    () async {
+      final results = withHosts(
+        qualifiedResults(),
+        (hosts) => [
+          for (final host in hosts)
+            {...host, if (host['host'] == 'macos-arm64') 'result': 'fail'},
+        ],
+      );
+      await expectLater(
+        check(results, [fixture.archive('linux-x64')]),
+        refusedWith([
+          'dartbrew-$version-macos-arm64.zip did not pass qualification',
+          'missing archive dartbrew-$version-windows-x64.zip',
+          'missing archive dartbrew-$version-macos-arm64.zip',
+        ]),
+      );
+    },
+  );
+
+  test('duplicate archives and host records are refused', () async {
+    final results = withHosts(
+      qualifiedResults(),
+      (hosts) => [...hosts, hosts.first],
+    );
+    final archives = fixture.allArchives();
+    await expectLater(
+      check(results, [...archives, archives.first]),
+      refusedWith([
+        'duplicate qualification record for host windows-x64',
+        'duplicate archive dartbrew-$version-windows-x64.zip',
+      ]),
+    );
   });
 
   group('archives are refused', () {
     test('when the results are for another version', () async {
-      final archive = fixture.archive('linux-x64');
       await expectLater(
-        check({...qualifiedResults(), 'version': '0.0.1'}, [archive]),
+        check({
+          ...qualifiedResults(),
+          'version': '0.0.1',
+        }, fixture.allArchives()),
         refusedWith([contains('for 0.0.1, not $version')]),
       );
     });
 
     test('when the bytes differ, naming the archive', () async {
-      final archive = fixture.archive('linux-x64', contents: 'rebuilt');
+      final archives = fixture.allArchives();
+      fixture.archive('linux-x64', contents: 'rebuilt');
       await expectLater(
-        check(qualifiedResults(), [archive]),
+        check(qualifiedResults(), archives),
         refusedWith([
           'dartbrew-$version-linux-x64.zip differs from the qualified bytes',
         ]),
@@ -136,7 +169,7 @@ void main() {
         ],
       );
       await expectLater(
-        check(results, [fixture.archive('linux-x64')]),
+        check(results, fixture.allArchives()),
         refusedWith([
           'dartbrew-$version-linux-x64.zip did not pass qualification',
         ]),
@@ -151,7 +184,7 @@ void main() {
       test('when named for $label', () async {
         final archive = fixture.archive('linux-x64', name: name);
         await expectLater(
-          check(qualifiedResults(), [archive]),
+          check(qualifiedResults(), [...fixture.allArchives(), archive]),
           refusedWith(['$name has no qualification record for $version']),
         );
       });
@@ -160,7 +193,11 @@ void main() {
     test('when none are given', () async {
       await expectLater(
         check(qualifiedResults(), []),
-        refusedWith(['no archives given']),
+        refusedWith([
+          'no archives given',
+          for (final host in supportedHosts)
+            'missing archive dartbrew-$version-$host.zip',
+        ]),
       );
     });
   });
@@ -175,9 +212,10 @@ void main() {
         ],
       );
       await expectLater(
-        check(results, [fixture.archive('linux-x64')]),
+        check(results, fixture.allArchives()),
         refusedWith([
           'qualification results have no record for host windows-x64',
+          'dartbrew-$version-windows-x64.zip has no qualification record for $version',
         ]),
       );
     });
@@ -206,7 +244,7 @@ void main() {
         ],
       );
       await expectLater(
-        check(results, [fixture.archive('windows-x64')]),
+        check(results, fixture.allArchives()),
         refusedWith([
           'the linux-x64 record names $stale, '
               'not dartbrew-$version-linux-x64.zip',
@@ -263,7 +301,7 @@ void main() {
         ...qualifiedResults(),
         'features': [
           feature('files'),
-          feature('loader', {
+          feature('runtime loader', {
             'azahar_aot': {
               'result': 'not_applicable',
               'reason': 'Azahar cannot run the runtime .so loader',
@@ -307,27 +345,27 @@ void main() {
       (
         'not applicable without reason',
         [
-          feature('loader', {'azahar_aot': notApplicable}),
+          feature('runtime loader', {'azahar_aot': notApplicable}),
         ],
-        'feature loader did not pass on azahar_aot: '
+        'feature runtime loader did not pass on azahar_aot: '
             '{"result":"not_applicable"}',
       ),
       (
         'not applicable with blank reason',
         [
-          feature('loader', {
+          feature('runtime loader', {
             'azahar_aot': {...notApplicable, 'reason': ' '},
           }),
         ],
-        'feature loader did not pass on azahar_aot: '
+        'feature runtime loader did not pass on azahar_aot: '
             '{"result":"not_applicable","reason":" "}',
       ),
       (
         'bare not applicable string',
         [
-          feature('loader', {'azahar_aot': 'not_applicable'}),
+          feature('runtime loader', {'azahar_aot': 'not_applicable'}),
         ],
-        'feature loader did not pass on azahar_aot: "not_applicable"',
+        'feature runtime loader did not pass on azahar_aot: "not_applicable"',
       ),
       (
         'second feature fails',
@@ -337,6 +375,16 @@ void main() {
         ],
         'feature platform did not pass on console_jit: "fail"',
       ),
+      for (final environment in ['console_aot', 'console_jit', 'azahar_aot'])
+        (
+          'pending files on $environment',
+          [
+            feature('files', {
+              environment: {...notApplicable, 'reason': 'pending'},
+            }),
+          ],
+          'feature files did not pass on $environment: {"result":"not_applicable","reason":"pending"}',
+        ),
       ('no features section', null, 'qualification results have no features'),
       ('empty features section', [], 'qualification results have no features'),
     ]) {
@@ -430,8 +478,13 @@ void main() {
       ['run', 'bin/check_release.dart', ...arguments],
     );
 
-    Future<ProcessResult> run(File results, File archive) =>
-        runWith(['--results', results.path, archive.path]);
+    Future<ProcessResult> run(File results, File archive) => runWith([
+      '--results',
+      results.path,
+      archive.path,
+      for (final host in supportedHosts.where((host) => host != 'linux-x64'))
+        fixture.archive(host, name: 'dartbrew-$current-$host.zip').path,
+    ]);
 
     test('prints the qualified archives and exits 0', () async {
       final archive = fixture.archive(
@@ -446,7 +499,9 @@ void main() {
       // Then the upstream report, or a line saying it is unavailable.
       expect(
         result.stdout,
-        startsWith('qualified: dartbrew-$current-linux-x64.zip\nupstream: '),
+        startsWith(
+          'qualified: dartbrew-$current-linux-x64.zip, dartbrew-$current-windows-x64.zip, dartbrew-$current-macos-arm64.zip\nupstream: ',
+        ),
       );
       expect(result.exitCode, 0);
     });
