@@ -1,6 +1,6 @@
 # dartbrew
 
-dartbrew is a self-contained Dart SDK and CLI for building, running and testing Dart programs as homebrew apps on the New Nintendo 3DS (the `ctr` target). Public names use CTR naming; never use the "3DS" trademark in package, command, file or API names.
+dartbrew is a Dart SDK and CLI that uses a local devkitPro installation for building, running and testing Dart programs as homebrew apps on the New Nintendo 3DS (the `ctr` target). Public names use CTR naming; never use the "3DS" trademark in package, command, file or API names.
 
 ## Code style
 

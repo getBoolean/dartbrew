@@ -32,7 +32,7 @@ Bring the CTR target from "core language only" to full Dart compatibility throug
 - upstream-suite conformance;
 - documented limits.
 
-Each phase ships as a dartbrew preview qualified on four hosts, a console and Azahar.
+Each phase ships as a dartbrew preview qualified on Windows x64, Linux x64 and macOS arm64, a console and Azahar.
 
 ### Problem Frame
 
@@ -65,7 +65,7 @@ As a result most pub packages and most `package:test` suites cannot run on the c
 - R14. `DynamicLibrary.open` loads a native `.so` from the SD card at runtime on the console, resolves its imports against the app, and returns working symbols. If the loader proves infeasible (U5 no-go), `DynamicLibrary.open` instead resolves library names against native libraries linked into the app at build time (Key Decisions).
 - R15. Packages with native build hooks (`package:hooks` code assets) build and link for CTR through dartbrew.
 - R16. A platform-channel API in the style of Flutter's channels lets Dart and native handlers exchange named, asynchronous messages in both directions with a standard codec.
-- R17. dartbrew compiles a project's C/C++ sources for CTR with tools bundled in the SDK, both for linking into the app and for producing loadable `.so` files.
+- R17. dartbrew compiles a project's C/C++ sources for CTR with the user's devkitARM toolchain, both for linking into the app and for producing loadable `.so` files.
 - R24. Developers generate type-safe, synchronous Dart bindings to C headers for CTR with FFIgen: libctru headers and the project's own headers, through dartbrew with SDK-bundled tools. Generated bindings are the primary documented way to call console code; platform channels (R16) remain the compatibility layer.
 
 **Library conformance and limits**
@@ -127,7 +127,7 @@ As a result most pub packages and most `package:test` suites cannot run on the c
 - KTD7. **TLS uses the SDK's BoringSSL**, built for ARMv6K without assembly and seeded from the console's hardware RNG (`PS_GenerateRandomBytes`), plus a bundled Mozilla root store. (session-settled: user-approved — chosen over the console's `sslc` service: same behavior as other Dart platforms, at a memory and size cost.)
 - KTD8. **Isolates share the app's isolate group.** `Isolate.spawn` uses the group's initialize callback, so AOT needs no second snapshot. `spawnUri` creates a new group from kernel in JIT only (R11).
 - KTD9. **Runtime loader first, link-time resolution as the fallback plan (R14).** The loader maps an ELF shared object built by dartbrew. It applies ARM relocations, resolves undefined symbols against the app's exported symbol table, runs initializers and marks code executable through the same Luma3DS memory path the JIT uses (patch 0009). U5's go/no-go decides whether U16 builds the loader or the fallback. (Inherits the session-settled loader decision; governs R14.)
-- KTD10. **The SDK bundles a C/C++ compiler for CTR (LLVM clang) with libctru, newlib and libstdc++ headers.** The alternative is requiring users to install devkitPro, and the SDK must stay self-contained. Branded devkitARM tools are not redistributed (`docs/ctr-native-sdk.md`). Clang is pinned like the existing binutils and built by the local producers.
+- KTD10. Project C/C++ builds use the user's devkitARM compiler, headers and libraries with the same CTR target flags used by the runtime.
 - KTD11. **The app exports a generated symbol table.** dartbrew's link step generates a table of exported native symbols:
   - those named by `@Native` in the kernel;
   - those of project and hook-built libraries;
@@ -138,9 +138,9 @@ As a result most pub packages and most `package:test` suites cannot run on the c
   `DynamicLibrary.process()` lookups and the runtime loader's import resolution both use it. Listing only these keeps `--gc-sections` effective for everything else and the app small.
 - KTD12. **dartbrew runs build hooks itself**, the way `flutter_tools` does. It passes a code config with the bundled CTR compiler and the preferred link mode. Dynamic link mode builds loadable `.so` files once U16 ships the loader; static linking is used otherwise. The exact target identity `package:hooks` accepts for a non-standard OS is settled in U17 against the pinned SDK's hooks version (Open Questions).
 - KTD13. **Platform channels are a dartbrew-shipped pure-Dart package plus a C header.** The codec follows the wire format of Flutter's `StandardMessageCodec`, so later Flutter plugins can share message formats. Dart-to-native calls use FFI. Native-to-Dart messages and replies use `Dart_PostCObject` through `dart_api_dl` (U15).
-- KTD14. **Each area is its own SDK patch, numbered from 0034, recorded in `toolchain/versions.json`.** Every patch changes the SDK hash, so each preview rebuilds host tools on all four hosts with the local producers used for preview.4.
+- KTD14. **Each area is its own SDK patch, numbered from 0034, recorded in `toolchain/versions.json`.** Every patch changes the SDK hash, so each preview rebuilds host tools on all three hosts with the local release producers.
 - KTD15. **Thread placement and priorities are decided by U4's spike, before isolates or the event handler depend on them.** The console scheduler does not time-slice threads of equal priority, so a busy isolate could starve the others and the event handler.
-- KTD17. **FFIgen runs with libclang bundled in the SDK and a dartbrew-supplied CTR configuration.** The libclang shared library comes from the same pinned LLVM release as the bundled clang (U13). dartbrew supplies the target triple, flags and SDK header paths from the same native compiler configuration the build uses, so generated bindings match compiled code. (Inherits the direct-interop Key Decision; governs R24.)
+- KTD17. FFIgen uses libclang from the developer's LLVM installation and parses the installed devkitPro headers with the CTR target configuration. The homebrew FFI package ships generated bindings. Consumers need LLVM only to regenerate them. (Governs R24.)
 - KTD16. **Conformance runs upstream test files batched into few apps.** One app per test is too slow to upload. Batched apps report per test, with a CTR status file of expected failures. Azahar runs the AOT corpus for throughput, and the console runs the full corpus in AOT and JIT before each phase release.
 
 ### High-Level Technical Design
@@ -228,9 +228,9 @@ sequenceDiagram
 | `soc` behaves differently on the console and in Azahar (poll edge cases, loopback, DNS) | Every networking test runs on both. Differences go into the exceptions list (R19). |
 | The runtime loader needs Luma3DS memory permissions, unavailable in Azahar | The loader is console-only by design (R22). Linked-in native code keeps working in Azahar. |
 | FFI callback trampolines need executable memory, which may not be granted in Azahar | U15 checks Azahar early. If unavailable, document callbacks as console-only in Azahar's column. |
-| Every SDK patch changes the SDK hash, forcing four-host host-tool rebuilds per release | Accepted cost (KTD14). The local producers and Mac delegation from preview.4 are reused. |
+| Each SDK patch changes the SDK hash and requires new host tools | Rebuild all three host bundles from one verified source revision and compare probe output. |
 | Thousands of upstream tests over the netloader are slow | Batching (KTD16), Azahar for bulk AOT runs, console for release qualification. |
-| Bundled clang and headers raise license and size questions | U13 audits licenses: libctru zlib, newlib BSD-style, libstdc++ GPL with runtime exception, LLVM Apache-2.0. Notices are added to SDK notices. |
+| The user may have a different devkitPro version than the maintainer | Keep its compiler and headers outside the SDK. Record installed and qualified package versions and run the native compile checks on each host. |
 
 ### Open Questions
 
@@ -257,7 +257,7 @@ sequenceDiagram
 | U10 | Isolates | `runtime/ctr/source/embedder.cc` | U4, U3 |
 | U11 | Sockets and DNS | `toolchain/patches/dart/0038-ctr-sockets.patch`, `runtime/ctr/source/link.cc` | U2, U4 |
 | U12 | TLS, HTTP and WebSocket | `toolchain/patches/dart/0039-ctr-boringssl.patch`, `release/licenses/` | U11 |
-| U13 | Bundled C/C++ toolchain | `release/native_clang.py`, `release/build_native_sdk.py` | none |
+| U13 | Project C/C++ builds with devkitARM | `packages/dartbrew/lib/src/devkitpro.dart`, `toolchain/target-ctr.json` | none |
 | U14 | Static native linking and symbol table | `packages/dartbrew/lib/src/targets/ctr/pipeline.dart` | U13 |
 | U15 | FFI callbacks and Dart API DL | `toolchain/patches/dart/0041-ctr-ffi-callbacks.patch` | U14 |
 | U16 | Runtime loader (or fallback) | `runtime/ctr/source/loader.cc` | U5, U14 |
@@ -266,8 +266,8 @@ sequenceDiagram
 | U19 | Upstream conformance runner | `tools/conformance/`, `runtime/ctr/test/ctr.status` | U9 |
 | U20 | Remaining libraries audit | `test/programs/libraries.dart` | U19 |
 | U21 | Resource limits and failure shapes | `runtime/ctr/source/embedder.cc`, `docs/ctr-supported-features.md` | U10, U12, U16 |
-| U22 | Feature qualification harness | `release/check_release.py`, `docs/qualification/` | U3 |
-| U23 | FFIgen bindings for CTR | `packages/dartbrew/lib/src/commands/ffigen.dart`, `release/native_clang.py` | U13, U14 |
+| U22 | Feature qualification harness | `dart run release_tools:check_release`, `docs/qualification/` | U3 |
+| U23 | FFIgen bindings for CTR | `packages/dartbrew/lib/src/commands/ffigen.dart`, homebrew FFI package | U13, U14 |
 
 ### U1. Port runtime/bin build to CTR
 
@@ -280,9 +280,9 @@ sequenceDiagram
 **Files:**
 - `toolchain/patches/dart/0034-ctr-io-port.patch` (new): adds `DART_HOST_OS_CTR` to `runtime/bin` platform switches, `*_ctr.cc` skeletons and the GN target for the CTR toolchain.
 - `toolchain/versions.json`: registers the patch and its hash.
-- `toolchain/build_sdk.py`: builds the I/O library in both target graphs.
-- `release/freeze_runtime.py`: exports the I/O library with the runtime assets.
-- `toolchain/test/test_build_sdk.py`
+- `dart run release_tools:build_sdk`: builds the I/O library in both target graphs.
+- `dart run release_tools:build_runtime`: exports the I/O library with the runtime assets.
+- `packages/release_tools/test/sdk_build_test.dart`
 
 **Approach:**
 - Mirror how earlier patches added `DART_HOST_OS_CTR` (`0004-ctr-os-concurrency.patch`, `0016-ctr-native-symbols.patch`): one `*_ctr.cc` per area next to the Linux variant.
@@ -292,9 +292,9 @@ sequenceDiagram
 **Patterns to follow:** `toolchain/patches/dart/0004-ctr-os-concurrency.patch`; the per-OS file split in the SDK's `runtime/bin/io_impl_sources.gni`.
 
 **Test scenarios:**
-- The CTR target graphs (AOT and JIT) build with the I/O library linked and `freeze_runtime.py` exports it.
+- The CTR target graphs (AOT and JIT) build with the I/O library linked and the producer includes its sources.
 - A fresh SDK replay with the new patch reproduces the recorded SDK head.
-- The host-VM check (`runtime/ctr/test/test_host_vm.py`) still passes the unsupported-API program with the same error texts.
+- The host-VM check (the gated host VM test) still passes the unsupported-API program with the same error texts.
 
 **Verification:** Both target graphs link, the runtime freezes, and the existing hardware fixtures still pass.
 
@@ -339,7 +339,7 @@ sequenceDiagram
 - `runtime/ctr/test/report_test.cc`
 
 **Approach:**
-- Keep run identity, the journal, the report socket and the keepalive exactly as the schema-2 launcher contract defines them (`docs/runbooks/ctr-runtime.md`).
+- Keep run identity, the journal, the report socket and the keepalive exactly as the schema-2 launcher contract defines them (`docs/ctr-native-sdk.md`).
 - The I/O layer's `soc` use and the launcher's report socket share one `socInit`. Ownership moves to a single owner that both use (detail in U11).
 
 **Patterns to follow:** the current resolver wiring in `runtime/ctr/source/embedder.cc` (`Dart_SetNativeResolver` on `dart:io`).
@@ -349,7 +349,7 @@ sequenceDiagram
 - Console: hello, async, exceptions and gc_stress still pass in AOT and JIT, with unchanged journal records.
 - Console: a run whose program never touches `dart:io` starts no slower than today (within measurement noise).
 
-**Verification:** All existing fixtures pass on the console and in Azahar; journal validation (`runtime/ctr/results.py`) accepts every run.
+**Verification:** All existing fixtures pass on the console and in Azahar; journal validation (the host verdict parser) accepts every run.
 
 ### U4. Scheduling and memory spike
 
@@ -473,11 +473,11 @@ sequenceDiagram
 - `runtime/ctr/source/main.cc` and `runtime/ctr/source/report.cc`: `exit(n)` ends the run with a terminal record carrying `n`.
 - `packages/dartbrew/lib/src/device/verdict.dart`: maps the reported exit code.
 - `test/programs/platform.dart` (new), `test/expected/platform.txt` (new)
-- `runtime/ctr/test/test_results.py`, `runtime/ctr/test/verdict_vectors.json`
+- the host verdict tests and shared vectors
 - `runtime/ctr/source/link.cc`: the report connection carries input from the host as well as output.
 - `runtime/ctr/source/keyboard.cc` (new): line input through the system software keyboard applet.
 - `packages/dartbrew/lib/src/device/device.dart`: `run` and `test` forward the terminal's stdin to the app.
-- `docs/runbooks/ctr-runtime.md`: the launcher contract gains the input direction.
+- `docs/ctr-native-sdk.md`: the launcher contract gains the input direction.
 
 **Approach:**
 - `stdout`/`stderr` writes become `output` records through the launcher (KTD4).
@@ -509,7 +509,7 @@ sequenceDiagram
 **Files:**
 - `packages/dartbrew/lib/src/test_runner/classify.dart`: drop rules for areas that now work.
 - `packages/dartbrew/lib/src/targets/ctr/templates.dart`: template shows an asset read.
-- `docs/ctr-supported-features.md`, `release/README.md`, `README.md`
+- `docs/ctr-supported-features.md`, `docs/user-guide.md`, `README.md`
 - `test/programs/unsupported_apis.dart`: trimmed to areas still unsupported.
 - `packages/dartbrew/test/test_reporter_test.dart`, `packages/dartbrew/test/create_test.dart`
 
@@ -517,7 +517,7 @@ sequenceDiagram
 - A failing test that reads a missing file reports `PathNotFoundException`, not an unsupported-area classification.
 - A freshly created project builds, runs and passes `dartbrew test` on the console and in Azahar.
 
-**Verification:** preview.5 qualifies through U22's harness and `release/check_release.py`.
+**Verification:** preview.5 qualifies through U22's harness and `dart run release_tools:check_release`.
 
 ### U10. Isolates
 
@@ -559,7 +559,7 @@ sequenceDiagram
 - `toolchain/patches/dart/0038-ctr-sockets.patch` (new): `socket_ctr.cc`, `socket_base_ctr.cc`, `sync_socket_ctr.cc`.
 - `runtime/ctr/source/link.cc`: one owner of `socInit` and its 0x1000-aligned buffer, shared with the I/O layer; buffer size revisited for server use.
 - `test/programs/sockets.dart` (new), `test/expected/sockets.txt` (new)
-- `release/test/test_native_sdk_integration.py`: host-side echo peer for the socket fixture.
+- `packages/release_tools/test/native_sdk_integration_test.dart`: host-side echo peer for the socket fixture.
 
 **Approach:**
 - Follow `socket_base_posix.cc`, branching where `soc` lacks options. Missing options fail per call with an `OSError`, as other platforms do for unsupported options.
@@ -587,7 +587,7 @@ sequenceDiagram
 
 **Files:**
 - `toolchain/patches/dart/0039-ctr-boringssl.patch` (new): BoringSSL GN build for CTR without assembly, entropy from `PS_GenerateRandomBytes`, `security_context_ctr.cc` loading the bundled store, `secure_socket_filter.cc` enabled.
-- `release/freeze_runtime.py`: exports the root store with the runtime assets.
+- `dart run release_tools:build_runtime`: exports the root store with the runtime assets.
 - `release/licenses/`: BoringSSL and Mozilla root store notices.
 - `test/programs/net_http.dart` (new), `test/expected/net_http.txt` (new)
 
@@ -604,31 +604,21 @@ sequenceDiagram
 
 **Verification:** `net_http.dart` passes on the console and in Azahar; memory cost of the first TLS connection is recorded for U21.
 
-### U13. Bundled C/C++ toolchain
+### U13. Compile project C/C++ with devkitARM
 
-**Goal:** The SDK contains a pinned clang and the target headers and libraries needed to compile C/C++ for CTR on all four hosts.
+**Goal:** Build native project sources with the same installed compiler, headers,
+system libraries and ABI that dartbrew uses to build the runtime.
 
 **Requirements:** R17
 
-**Dependencies:** None
+**Dependencies:** The local native runtime build and devkitPro discovery.
 
-**Files:**
-- `release/native_clang.py` (new): producer for a trimmed clang per host, mirroring `release/native_binutils.py`.
-- `release/clang-source.json` (new): pinned source and hashes.
-- `release/build_native_sdk.py` and `release/bundle_native_sdk.py`: include clang, headers and a CTR target config.
-- `release/licenses/`: LLVM, newlib, libctru and libstdc++ notices.
-- `release/test/test_native_clang.py` (new)
+**Files:** `packages/dartbrew/lib/src/devkitpro.dart`, `toolchain/target-ctr.json`,
+the CTR build pipeline and the native SDK integration test.
 
-**Approach:**
-- Follow KTD10: one clang per host, built by the local producers.
-- The CTR target profile in `toolchain/target-ctr.json` becomes the single source of compiler flags for both the runtime and user code.
-
-**Test scenarios:**
-- Each host's bundle compiles a C file calling `printf` and a C++ file using `std::vector` into ARMv6K hard-float objects the bundled linker accepts.
-- The producer rejects a clang archive whose hash differs from the pin.
-- `dartbrew doctor` verifies clang and the headers, and reports a missing header by name.
-
-**Verification:** Producer tests pass and each host's SDK check compiles both samples.
+**Verification:** On all three hosts the extracted SDK compiles a C file
+calling `printf` and a C++ file using `std::vector` into ARMv6K hard-float
+objects that link into an app. Doctor reports the installed package versions.
 
 ### U14. Static native linking and symbol table
 
@@ -693,7 +683,7 @@ sequenceDiagram
 **Files:**
 - `runtime/ctr/source/loader.cc` and `loader.h` (new): production loader per KTD9.
 - `toolchain/patches/dart/0042-ctr-dynamic-library-open.patch` (new): routes `DynamicLibrary.open` on CTR to the launcher's loader.
-- `packages/dartbrew/lib/src/targets/ctr/shared_library.dart` (new): builds `.so` files from project sources with the bundled toolchain (R17).
+- `packages/dartbrew/lib/src/targets/ctr/shared_library.dart` (new): builds `.so` files from project sources with the installed devkitARM toolchain (R17).
 - `runtime/ctr/test/loader_test.cc` (new, host test with prebuilt sample objects)
 - `test/programs/ffi_dynamic/` (new fixture project)
 
@@ -726,7 +716,7 @@ sequenceDiagram
 - `packages/dartbrew/lib/src/targets/ctr/hooks.dart` (new): runs package hooks with the CTR code config (KTD12) and collects code assets.
 - `packages/dartbrew/lib/src/targets/ctr/pipeline.dart`: links static assets, and packages dynamic ones into the app folder for U16.
 - `packages/dartbrew/lib/src/targets/ctr/hook_defaults.dart` (new): dartbrew's table of CTR hook settings for known packages.
-- `release/build_native_sdk.py`: bundles the pinned SQLite amalgamation (`sqlite3.c`) the sqlite3 entry points at.
+- `dart run release_tools:assemble_sdk`: bundles the pinned SQLite amalgamation (`sqlite3.c`) the sqlite3 entry points at.
 - `packages/dartbrew/test/hooks_test.dart` (new), `test/programs/hooks_sqlite/` (new fixture project using `package:sqlite3` with no hook settings in its pubspec)
 
 **Approach:**
@@ -856,8 +846,8 @@ sequenceDiagram
 **Dependencies:** U3
 
 **Files:**
-- `release/check_release.py`: also checks a `features` section of `results.json` for the version.
-- `release/test/test_check_release.py`
+- `dart run release_tools:check_release`: also checks a `features` section of `results.json` for the version.
+- `packages/release_tools/test/release_check_test.dart`
 - `docs/qualification/README.md` (new): how release and feature results are recorded.
 - `.claude/skills/driving-ctr-console/SKILL.md`: notes for networking fixtures that need a host peer.
 
@@ -877,12 +867,12 @@ sequenceDiagram
 **Dependencies:** U13, U14
 
 **Files:**
-- `release/native_clang.py` and `release/clang-source.json`: the clang component also carries the libclang shared library from the same pinned LLVM release.
-- `packages/dartbrew/lib/src/commands/ffigen.dart` (new): `dartbrew ffigen` runs the project's FFIgen with the bundled libclang and the CTR compiler options (KTD17).
+- Homebrew FFI package: distribute generated bindings and document regeneration with the developer’s LLVM installation.
+- `packages/dartbrew/lib/src/commands/ffigen.dart` (new): `dartbrew ffigen` runs the project's FFIgen with the locally installed libclang and the CTR compiler options (KTD17).
 - `packages/dartbrew/lib/src/cli.dart`: registers the command.
 - `packages/dartbrew/lib/src/targets/ctr/templates.dart`: the native template uses generated bindings.
 - `packages/dartbrew/test/ffigen_test.dart` (new), `test/programs/ffigen_libctru/` (new fixture project)
-- `release/README.md`, `docs/ctr-supported-features.md`: generated bindings documented as the primary interop path.
+- `docs/user-guide.md`, `docs/ctr-supported-features.md`: generated bindings documented as the primary interop path.
 
 **Approach:**
 - FFIgen is the project's own dev dependency. dartbrew passes the libclang path and compiler options, and never edits the project's FFIgen config file.
@@ -892,7 +882,7 @@ sequenceDiagram
 **Test scenarios:**
 - Generating bindings for libctru's `hid.h` produces Dart functions for `hidScanInput` and `hidKeysDown`, with the integer types of libctru's typedefs (for example `u32` as `Uint32`).
 - On the console, the fixture calls `hidScanInput()` and `hidKeysDown()` synchronously through the generated bindings and prints the key state.
-- A project header with a struct and an enum generates bindings whose struct size matches what the bundled compiler reports.
+- A project header with a struct and an enum generates bindings whose struct size matches what the installed devkitARM compiler reports.
 - A header with a syntax error fails `dartbrew ffigen`, showing libclang's message with file and line.
 
 **Verification:** The fixture passes on the console in AOT and JIT and in Azahar; generated struct layouts match compiled layouts.
@@ -903,13 +893,13 @@ sequenceDiagram
 
 | Gate | Command or procedure | Applies to |
 | --- | --- | --- |
-| dartbrew unit tests | `dart analyze`, `dart format --set-exit-if-changed`, `dart test` in `packages/dartbrew` and `packages/dartbrew_channels`, run in the `ctr-dart-toolchain` container | Every unit touching Dart packages |
-| Python suites | `python3 -m unittest discover -s toolchain/test`, `-s runtime/ctr/test`, `-s release/test` in the container | Every unit |
+| dartbrew unit tests | `dart analyze`, `dart format --set-exit-if-changed`, `dart test` in `packages/dartbrew` and `packages/release_tools` (plus `packages/dartbrew_channels` when introduced), run in the `ctr-dart-toolchain` container | Every unit touching Dart packages |
+| Bootstrap suite | `python3 -m unittest discover -s toolchain/test` in the toolchain container | Changes to SDK materialization and pins |
 | SDK replay | Fresh bootstrap with the patch queue reproduces the head recorded in `toolchain/versions.json` (`CTR_SDK_INTEGRATION=1`) | U1, U2, U6, U8, U10-U12, U14-U16 |
 | Launcher host tests | C++ host tests in `runtime/ctr/test` (report, event handler, loader) | U2, U3, U16 |
-| Device fixtures | Each fixture in `test/programs` with its `test/expected` output, through `dartbrew run --verdict` on the console (AOT and JIT) and in Azahar (AOT), validated by `runtime/ctr/results.py` | Every feature unit |
+| Device fixtures | Check `dartbrew run --verdict` output and terminal outcome against each fixture on console AOT/JIT and Azahar AOT | Every feature unit |
 | Conformance | `tools/conformance` report with no failures outside `runtime/ctr/test/ctr.status` | U19-U21, every phase release from preview.6 on |
-| Release | Four-host bundles via `release/build_native_sdk.py`, then `release/check_release.py --results docs/qualification/<version>/results.json` | U9, U10, U12, U18, U21 phase ends |
+| Release | Assemble Windows x64, Linux x64 and macOS arm64 archives, then check all three against their qualification record with `dart run release_tools:check_release` | U9, U10, U12, U18, U21 phase ends |
 
 ## Definition of Done
 
@@ -924,9 +914,9 @@ sequenceDiagram
 
 ### Sources
 
-- Current `dart:io` fallback: `runtime/ctr/source/unsupported.cc`, wired in `runtime/ctr/source/embedder.cc`.
-- CTR as a host OS in the SDK: `toolchain/patches/dart/0004-ctr-os-concurrency.patch`, `0012-ctr-embedder-async.patch` (CTR platform includes all VM libraries), `0007-ctr-static-library-resolution.patch` (process lookups throw today), `0009-ctr-virtual-memory.patch` (Luma custom SVC check for executable memory), `0033-ctr-uri-base.patch`.
+- Launcher I/O integration: `runtime/ctr/source/embedder.cc`.
+- The ordered SDK patches and pins are listed in `toolchain/versions.json`.
 - SDK I/O layer per-OS split: the pinned checkout's `runtime/bin/io_impl_sources.gni` (Linux, macOS, Fuchsia and Windows variants, plus `secure_socket_unsupported.cc`), and `third_party/boringssl`, `third_party/zlib`.
 - libctru: `poll.h`, `netdb.h` (`getaddrinfo`), `3ds/services/soc.h`, `3ds/romfs.h` (`romfsMountSelf`), `3ds/services/ps.h`.
-- Launcher contract, journal and qualification: `docs/runbooks/ctr-runtime.md`, `docs/qualification/0.1.0-preview.4/results.json`, `release/check_release.py`.
+- Launcher contract, journal and qualification: `docs/ctr-native-sdk.md`, `docs/qualification/0.1.0-preview.4/results.json`, `dart run release_tools:check_release`.
 - Azahar limits (no JIT; loader needs Luma3DS): `docs/ctr-supported-features.md`.

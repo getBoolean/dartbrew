@@ -27,7 +27,7 @@ struct RunConfig {
 // one optional host=<ipv4>:<port> line. Values are validated by Report::Begin.
 bool ReadConfig(FILE* config, RunConfig* run);
 enum class ArgIdentity { absent, ok, invalid };
-// Reads netloader argv identity tokens (docs/runbooks/ctr-runtime.md). The
+// Reads netloader argv identity tokens (docs/ctr-native-sdk.md). The
 // host comes from the netloader address (libctru __3dslink_host, zero when
 // absent) plus --ctr-host-port. Linked build values fill omitted keys.
 ArgIdentity ReadArgs(int argc, char** argv, const BuildIdentity& build,

@@ -13,21 +13,15 @@ toolchain, patch and dependency pins are in `toolchain/versions.json`.
 - **ICU and Unicode contributors:** the pinned Dart build's Unicode dependency,
   with a recorded newlib portability patch. [ICU](https://github.com/unicode-org/icu),
   [bundled notice](release/licenses/icu.LICENSE).
-- **devkitPro contributors:** the official pinned devkitARM image, libctru and
-  3DS tools supply the cross compiler, hardware/runtime interfaces and ELF-to-3DSX
-  conversion. [devkitPro](https://devkitpro.org/),
-  [libctru](https://github.com/devkitPro/libctru).
-- **GCC and newlib contributors:** GCC runtime software arithmetic and newlib
-  software math are linked through the selected official multilib providers.
-  Provider hashes and actual linked imports/exports are recorded by the build.
-  GCC runtime licensing includes the GCC Runtime Library Exception; retain the
-  licenses/notices applicable to the exact toolchain and linked libraries.
+- **devkitPro, GCC, newlib and GNU Binutils contributors:** SDK users install
+  devkitARM and libctru from devkitPro. Native builds use its compiler,
+  assembler, linker, startup code, selected runtime libraries and headers. The
+  software-math component is derived locally from the installed soft-float
+  libm. Maintainers use the pinned devkitPro container for the Linux producer.
+  [devkitPro](https://devkitpro.org/), [libctru](https://github.com/devkitPro/libctru),
+  [GNU Binutils](https://sourceware.org/binutils/),
   [GCC runtime exception](https://www.gnu.org/licenses/gcc-exception-3.1.html),
   [newlib licensing](https://sourceware.org/newlib/COPYING.NEWLIB).
-- **GNU Binutils contributors:** independent native ARM assembler and linker
-  builds from unmodified upstream source are used in the complete SDK pipeline.
-  Exact source checksums, build material and dependency audits accompany the
-  producer outputs. [GNU Binutils](https://sourceware.org/binutils/).
 - **Chromium/depot_tools, GN, Ninja and LLVM/Clang contributors:** pinned host
   dependency synchronization, build generation and host compiler tools used by
   the SDK build. Their own source/distribution notices remain applicable.

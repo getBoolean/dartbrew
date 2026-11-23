@@ -15,9 +15,6 @@ New-Item -ItemType Directory -Force -Path $env:CTR_STATE_DIR,
     (Join-Path $env:CTR_STATE_DIR 'tmp') | Out-Null
 docker compose config
 docker compose up -d toolchain
-docker compose exec -T toolchain python3 toolchain/bootstrap.py --source /state/sdk --depot-tools /state/depot_tools --sync-deps
-docker compose exec -T toolchain python3 toolchain/build_sdk.py configure --source /state/sdk --component target --mode aot
-docker compose exec -T toolchain python3 toolchain/build_sdk.py configure --source /state/sdk --component target --mode jit
 ```
 
 Replace `<state-dir>` with an existing host folder that has enough space, such
@@ -48,9 +45,8 @@ Use `docker compose exec -T toolchain` for commands in the existing named
 container. Run one Ninja process per output directory. Read the output paths
 and compatibility records printed by configuration before starting builds.
 
-`toolchain/native_linux.py check` verifies the pinned devkitPro packages on
-native Linux/WSL hosts that have them installed. No Docker build or runtime
-execution is implied by successful Compose configuration rendering.
+The [release checklist](releasing.md) gives the bootstrap, native build and
+verification commands to run in this service.
 
 Remove this project's container and network with `docker compose down`.
 Its host state folder is retained. Inspect or archive that folder before

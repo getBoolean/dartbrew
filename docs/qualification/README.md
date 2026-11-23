@@ -12,6 +12,7 @@ results name.
 - `hosts`: one entry per host SDK archive, with `sdk_archive` (the file name,
   `dartbrew-<version>-<host>.zip`), `sdk_sha256` and `result` (`pass` or `fail`).
 - `console` and `azahar`: what ran on a real console and in Azahar, and how.
+- `devkitpro`: package versions in `devkitARM` and `libctru`. Record host-specific differences alongside the host records.
 - `features`: per-feature results (required from `0.1.0-preview.5` on).
 
 Other fields (build provenance, notes) are free-form records for people.
@@ -49,20 +50,13 @@ JIT VM or the runtime `.so` loader. Everything else must be `pass`.
 ]
 ```
 
-`0.1.0-preview.4` and earlier were published before feature results existed;
-their files have no `features` section and the guard does not ask for one.
+Preview.4 and earlier have historical records produced before this feature
+matrix existed. Each release candidate needs its own measurements.
 
-## The publish guard
+## Checking the archives
 
-Run before any `gh release upload`:
-
-```console
-python release/check_release.py --results docs/qualification/<version>/results.json out/*/dartbrew-*.zip
-```
-
-It refuses the release when an archive has no passing host record for the
-version or its SHA-256 differs, when `features` is missing or empty, or when a
-feature has a required environment that is not `pass` (or `not_applicable` with
-a reason). The error names the archive, or the feature and environment.
-
-Its tests: `python -B -m unittest discover -s release/test -p test_check_release.py -v`.
+Run `dart run release_tools:check_release` from `packages/release_tools`,
+passing `--results` and the three SDK ZIP paths. The guard checks archive
+names, SHA-256 digests, passing host records, devkitPro versions and the
+environment results for each recorded feature. The [release checklist](../releasing.md)
+gives the order of the checks and publication steps.
