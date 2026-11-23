@@ -1,0 +1,107 @@
+{
+  "version": "0.1.0-preview.5",
+  "status": "draft",
+  "sdk_head": "35dac222e9d5c7c33e4b6e80ee2b54123a3cba8b",
+  "sdk_tree": "1be5b2e114d0857c7b5d607b62b77c7e5e9b9f75",
+  "snapshot_hash": "c5e274828bf37a90359bd3b0753e3eb2",
+  "hosts": [
+    {
+      "host": "windows-x64",
+      "sdk_archive": "dartbrew-0.1.0-preview.5-windows-x64.zip",
+      "result": "pending"
+    },
+    {
+      "host": "linux-x64",
+      "sdk_archive": "dartbrew-0.1.0-preview.5-linux-x64.zip",
+      "result": "pending"
+    },
+    {
+      "host": "macos-arm64",
+      "sdk_archive": "dartbrew-0.1.0-preview.5-macos-arm64.zip",
+      "result": "pending"
+    }
+  ],
+  "features": [
+    {
+      "name": "async",
+      "covers": "Timers, futures and asynchronous event delivery",
+      "results": {
+        "console_aot": "pending",
+        "console_jit": "pending",
+        "azahar_aot": "pending"
+      }
+    },
+    {
+      "name": "exceptions",
+      "covers": "Dart exceptions and stack traces",
+      "results": {
+        "console_aot": "pending",
+        "console_jit": "pending",
+        "azahar_aot": "pending"
+      }
+    },
+    {
+      "name": "exit_code",
+      "covers": "Explicit process exit code and output flush",
+      "results": {
+        "console_aot": "pending",
+        "console_jit": "pending",
+        "azahar_aot": "pending"
+      }
+    },
+    {
+      "name": "files",
+      "covers": "Synchronous and asynchronous SD filesystem operations",
+      "results": {
+        "console_aot": "pending",
+        "console_jit": "pending",
+        "azahar_aot": "pending"
+      }
+    },
+    {
+      "name": "gc_stress",
+      "covers": "Allocation and garbage collection under load",
+      "results": {
+        "console_aot": "pending",
+        "console_jit": "pending",
+        "azahar_aot": "pending"
+      }
+    },
+    {
+      "name": "hello",
+      "covers": "Application launch, stdout and orderly shutdown",
+      "results": {
+        "console_aot": "pending",
+        "console_jit": "pending",
+        "azahar_aot": "pending"
+      }
+    },
+    {
+      "name": "numeric",
+      "covers": "ARMv6K numeric operations and software math",
+      "results": {
+        "console_aot": "pending",
+        "console_jit": "pending",
+        "azahar_aot": "pending"
+      }
+    },
+    {
+      "name": "platform",
+      "covers": "Platform properties, standard streams and exit status",
+      "results": {
+        "console_aot": "pending",
+        "console_jit": "pending",
+        "azahar_aot": "pending"
+      }
+    },
+    {
+      "name": "subnormal",
+      "covers": "Subnormal floating-point behavior",
+      "results": {
+        "console_aot": "pending",
+        "console_jit": "pending",
+        "azahar_aot": "pending"
+      }
+    }
+  ]
+}

@@ -39,6 +39,22 @@ void main() {
       expect(closure.files.values.single.path, file.path);
       expect(closure.collect(p.join(devkit, 'inc.h')), '@devkitpro@/inc.h');
       expect(closure.files, hasLength(1));
+      final installedSource = p.join(devkit, 'library.c');
+      expect(
+        () => captureUnit(
+          {
+            'directory': root.path,
+            'file': installedSource,
+            'output': 'unit.o',
+            'command':
+                "${profile.compilerPrefix}gcc -c '$installedSource' -o unit.o",
+          },
+          'runtime',
+          closure,
+          profile,
+        ),
+        throwsFormatException,
+      );
       expect(
         () => closure.collect(p.join(root.parent.path, 'other.h')),
         throwsFormatException,

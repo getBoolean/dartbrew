@@ -232,9 +232,11 @@ flowchart TB
 
 ## Implementation Units
 
-### Implementation status at U21
+### Implementation and qualification status
 
-U2 through U9, U14 and U16 are committed. U21 passed the Windows AOT spike below. U22 and U23 are next, followed by U13 and U15 for SDK assembly, U17 and U18 for the patch queue, and U19 and U20 for qualification and documentation. The Windows spike qualifies one hello build. Three-host SDK and physical-console qualification remain open.
+U2 through U9, U14 and U16 are committed. The U21 spike and U22/U23 local toolchain implementation passed a Windows AOT hello build. With the development SDK, the cold build compiled 646 units in 314.735 seconds. The warm build took 45.469 seconds, reused all 13 cached outputs and produced the same `.3dsx` bytes. Both applications printed `hello:42` and passed cleanup and terminal checks in Azahar 2126.2 on Linux.
+
+The U13/U15 producers, U17 launcher, U18 patch queue and U20 release documentation are implemented. The 29 patches replayed to tree `1be5b2e114d0857c7b5d607b62b77c7e5e9b9f75`. U19 three-host and device qualification is in progress. The [preview.5 results](../qualification/0.1.0-preview.5/results.json) track the candidate separately from the development SDK measurements.
 
 ### Unit Index
 
