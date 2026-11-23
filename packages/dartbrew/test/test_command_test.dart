@@ -23,6 +23,41 @@ const _deadlines = RunDeadlines(
 
 typedef _Result = ({int? code, String out, String err, String project});
 
+/// A stage that exits on cancellation or reports a natural failure after a
+/// short deadline, so a missed interrupt does not hang the regression test.
+class _WaitingStage implements Process {
+  final _exit = Completer<int>();
+  late final Timer _deadline;
+  bool killed = false;
+
+  _WaitingStage() {
+    _deadline = Timer(
+      const Duration(milliseconds: 300),
+      () => _exit.complete(42),
+    );
+  }
+
+  @override
+  Future<int> get exitCode => _exit.future;
+
+  @override
+  bool kill([ProcessSignal signal = ProcessSignal.sigterm]) {
+    if (_exit.isCompleted) return false;
+    killed = true;
+    _deadline.cancel();
+    _exit.complete(1);
+    return true;
+  }
+
+  @override
+  Stream<List<int>> get stdout => const Stream.empty();
+  @override
+  Stream<List<int>> get stderr => Stream.value(utf8.encode('stage diagnostic'));
+  @override
+  Never noSuchMethod(Invocation invocation) =>
+      super.noSuchMethod(invocation) as Never;
+}
+
 String _project(Map<String, String> files) {
   final root = Directory.systemTemp.createTempSync('dartbrew-test-');
   addTearDown(() => root.deleteSync(recursive: true));
@@ -348,6 +383,67 @@ void main() {
       expect(lastEvent('$out'), containsPair('type', 'done'));
       expect(lastEvent('$out'), containsPair('success', false));
     });
+
+    for (final stage in ['packages', 'link']) {
+      test(
+        'interrupt during $stage startup reaps child before reporter exits',
+        () async {
+          final project = _project({'test/a_test.dart': _testFile});
+          final interrupts = StreamController<Object?>(sync: true);
+          addTearDown(interrupts.close);
+          late _WaitingStage child;
+          final exit = Completer<(int, bool)>();
+          final result = await _test(
+            project,
+            ['-r', 'json'],
+            interrupts: () => interrupts.stream,
+            exitProcess: (code) async => exit.complete((code, child.killed)),
+            start:
+                (
+                  exe,
+                  args, {
+                  workingDirectory,
+                  environment,
+                  mode = ProcessStartMode.normal,
+                }) async {
+                  final selected = stage == 'packages'
+                      ? args.isNotEmpty && args.first == 'pub'
+                      : args.contains('--gc-sections');
+                  if (selected) {
+                    child = _WaitingStage();
+                    interrupts.add(null);
+                    await Future<void>.delayed(Duration.zero);
+                    return child;
+                  }
+                  return startBuildStub(
+                    exe,
+                    args,
+                    workingDirectory: workingDirectory,
+                    environment: environment,
+                    mode: mode,
+                  );
+                },
+          );
+          expect(result.code, 130);
+          expect(await exit.future, (130, true));
+          expect(lastEvent(result.out), containsPair('type', 'done'));
+          expect(result.err, isNot(contains('Sending ')));
+          final work = p.join(
+            project,
+            '.dart_tool',
+            'dartbrew',
+            'test',
+            'ctr',
+            'jit',
+            'work',
+          );
+          expect(
+            File(p.join(work, '$stage.log')).readAsStringSync(),
+            contains('stage diagnostic'),
+          );
+        },
+      );
+    }
 
     test('interrupting native compilation cleans staging before exit', () async {
       final project = _project({'test/a_test.dart': _testFile});

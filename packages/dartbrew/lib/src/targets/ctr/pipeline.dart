@@ -160,17 +160,17 @@ Future<CtrBuild> buildCtrApplication({
   ProcessStarter start = startProcess,
   StringSink? warnings,
   Map<String, String>? environment,
-  Stream<Object?>? nativeInterrupts,
-}) async {
+  BuildProcesses? processes,
+}) => BuildProcesses.scoped(start, (processes) async {
   final smdh = projectSmdh(
     project,
     fallbackTitle: p.basenameWithoutExtension(entry),
     warnings: warnings ?? stderr,
   );
-  final run = StageRunner(sdk, work, start: start);
+  final run = StageRunner(sdk, work, start: processes.start);
   final devkitPro = await DevkitPro.discover(
     environment: environment,
-    start: start,
+    start: processes.start,
   );
   final advice = devkitPro.mismatchAdvice(sdk.manifest.runtime.devkitPro);
   final aot = mode == BuildMode.aot;
@@ -249,17 +249,12 @@ Future<CtrBuild> buildCtrApplication({
     );
   }
   final elf = File(p.join(work.path, 'application.elf'));
-  final native =
-      await NativeBuild(
-        sdk: sdk,
-        devkitPro: devkitPro,
-        environment: environment,
-        start: start,
-      ).build(
-        mode: mode.name,
-        sdkManifestSha256: sdkHash,
-        interrupts: nativeInterrupts,
-      );
+  final native = await NativeBuild(
+    sdk: sdk,
+    devkitPro: devkitPro,
+    environment: environment,
+    start: start,
+  ).build(mode: mode.name, sdkManifestSha256: sdkHash, processes: processes);
   final linkArguments = await ctrLinkArguments(
     runtime.linkTemplate,
     launcher: native.launcherObjects,
@@ -281,6 +276,8 @@ Future<CtrBuild> buildCtrApplication({
     executable: devkitPro.tool('ld'),
     failureAdvice: advice,
   );
+  final elfHash = await fileDigest(elf);
+  processes.check();
   final artifact = encode3dsx(elf.readAsBytesSync(), smdh: smdh);
   application.writeAsBytesSync(artifact);
   return CtrBuild(
@@ -292,8 +289,8 @@ Future<CtrBuild> buildCtrApplication({
     buildId: buildId,
     artifactSha256: sha256.convert(artifact).toString(),
     payloadSha256: payloadHash,
-    elfSha256: await fileDigest(elf),
+    elfSha256: elfHash,
     sdkManifestSha256: sdkHash,
     sdkHead: runtime.sdkHead,
   );
-}
+}, parent: processes);

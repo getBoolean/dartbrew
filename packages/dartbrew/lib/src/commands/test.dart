@@ -157,13 +157,19 @@ class _TestCommand extends Command<int> {
     final session = TestSession(
       json ? JsonRenderer(_out, _err, pid: pid) : CompactRenderer(_out),
     )..begin(files.length);
-    final interrupted = json
-        ? _interrupts?.call().listen((_) async {
-            session.stop();
-            await _runner.interruptBuild();
-            await _exitProcess(interruptedExitCode);
-          })
+    final buildProcesses = json && _interrupts != null
+        ? BuildProcesses(_start)
         : null;
+    Future<void>? exiting;
+    Future<void> stop(BuildProcesses processes) async {
+      session.stop();
+      await processes.cancelAndWait();
+      await _exitProcess(interruptedExitCode);
+    }
+
+    final interrupted = buildProcesses == null
+        ? null
+        : _interrupts!().listen((_) => exiting ??= stop(buildProcesses));
     try {
       return await _runTests(
         settings,
@@ -171,10 +177,11 @@ class _TestCommand extends Command<int> {
         files,
         names: names,
         plainNames: args.multiOption('plain-name'),
-        reporterHandlesInterrupts: interrupted != null,
+        buildProcesses: buildProcesses,
       );
     } finally {
       session.stop();
+      await exiting;
       await interrupted?.cancel();
     }
   }
@@ -188,7 +195,7 @@ class _TestCommand extends Command<int> {
     List<String> selected, {
     required List<String> names,
     required List<String> plainNames,
-    required bool reporterHandlesInterrupts,
+    required BuildProcesses? buildProcesses,
   }) async {
     final project = settings.project;
     var files = selected;
@@ -210,7 +217,7 @@ class _TestCommand extends Command<int> {
           onOutput: session.addOutput,
           err: _err,
           buildDirectory: 'test',
-          reporterHandlesInterrupts: reporterHandlesInterrupts,
+          buildProcesses: buildProcesses,
         );
         break;
       } on DartbrewException catch (error) {
@@ -219,7 +226,11 @@ class _TestCommand extends Command<int> {
       } on StageFailure catch (error) {
         if (checked || error.stage != 'kernel') rethrow;
         checked = true;
-        final failures = await _findLoadErrors(settings, files);
+        final failures = await BuildProcesses.scoped(
+          _start,
+          (scope) => _findLoadErrors(settings, files, scope.start),
+          parent: buildProcesses,
+        );
         if (failures.isEmpty) rethrow;
         failures.forEach(
           (file, message) =>
@@ -291,6 +302,7 @@ class _TestCommand extends Command<int> {
   Future<Map<String, String>> _findLoadErrors(
     DeviceRunSettings settings,
     List<String> files,
+    ProcessStarter start,
   ) async {
     final sdk = _runner.sdk!;
     final work = Directory(
@@ -301,7 +313,7 @@ class _TestCommand extends Command<int> {
     final packages = File(
       p.join(settings.project, '.dart_tool', 'package_config.json'),
     );
-    final runner = StageRunner(sdk, work, start: _start);
+    final runner = StageRunner(sdk, work, start: start);
     final failures = <String, String>{};
     for (var i = 0; i < files.length; i++) {
       final stage = 'check-$i';

@@ -249,22 +249,6 @@ final class DeviceRunner {
   final Stream<List<int>> Function()? input;
 
   NativeSdk? _sdk;
-  Future<CtrBuild>? _building;
-  Completer<void>? _buildInterrupt;
-
-  /// Lets a reporter exit only after any interrupted build has released its
-  /// temporary files and compiler processes.
-  Future<void> interruptBuild() async {
-    final interrupt = _buildInterrupt;
-    if (interrupt == null) return;
-    if (!interrupt.isCompleted) interrupt.complete();
-    try {
-      await _building;
-    } on Exception {
-      // The command awaiting the build owns its failure and diagnostics.
-    }
-  }
-
   DeviceRunner({
     this.start = startProcess,
     this.environment,
@@ -310,7 +294,7 @@ final class DeviceRunner {
     required void Function(String text) onOutput,
     required StringSink err,
     String buildDirectory = 'run',
-    bool reporterHandlesInterrupts = false,
+    BuildProcesses? buildProcesses,
   }) async {
     // Azahar is found before building, so a missing emulator fails fast.
     final emulator = switch (settings.device) {
@@ -334,10 +318,7 @@ final class DeviceRunner {
     if (output.existsSync()) output.deleteSync(recursive: true);
     final work = Directory(p.join(output.path, 'work'))
       ..createSync(recursive: true);
-    final interrupt = _buildInterrupt = reporterHandlesInterrupts
-        ? Completer<void>()
-        : null;
-    final future = _building = buildCtrApplication(
+    final build = await buildCtrApplication(
       sdk: sdk,
       project: project,
       entry: entry,
@@ -351,15 +332,9 @@ final class DeviceRunner {
       start: start,
       warnings: err,
       environment: environment,
-      nativeInterrupts: interrupt?.future.asStream(),
+      processes: buildProcesses,
     );
-    final CtrBuild build;
-    try {
-      build = await future;
-    } finally {
-      _building = null;
-      _buildInterrupt = null;
-    }
+    buildProcesses?.check();
 
     final ServerSocket listener;
     try {
@@ -390,6 +365,7 @@ final class DeviceRunner {
           device = console;
           err.writeln('Sending $appName to ${console.address.address}.');
       }
+      buildProcesses?.check();
       final identity = RunIdentity.ofBuild(
         build,
         schema: 2,

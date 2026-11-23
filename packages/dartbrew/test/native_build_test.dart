@@ -232,7 +232,9 @@ void main() {
           ),
         ),
       );
-      expect(cache.listSync(), isEmpty);
+      expect(cache.listSync().map((entry) => p.basename(entry.path)), [
+        '.locks',
+      ]);
     },
   );
 
@@ -283,7 +285,9 @@ void main() {
         await Future.wait(children.map((p) => p.exitCode)),
         everyElement(1),
       );
-      expect(cache.listSync(), isEmpty);
+      expect(cache.listSync().map((entry) => p.basename(entry.path)), [
+        '.locks',
+      ]);
     },
   );
 
@@ -323,7 +327,9 @@ void main() {
           ),
         ),
       );
-      expect(cache.listSync(), isEmpty);
+      expect(cache.listSync().map((entry) => p.basename(entry.path)), [
+        '.locks',
+      ]);
     },
   );
 
@@ -355,7 +361,9 @@ void main() {
           ),
         ),
       );
-      expect(cache.listSync(), isEmpty);
+      expect(cache.listSync().map((entry) => p.basename(entry.path)), [
+        '.locks',
+      ]);
     },
     skip: skipNative,
   );

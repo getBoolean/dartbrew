@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
+import 'cache_lock.dart';
 
 /// A cache of immutable native build directories. A directory becomes visible
 /// under its final key only after its contents have been built successfully.
@@ -35,30 +36,52 @@ final class NativeCache {
     return NativeCache(Directory(p.join(location, 'dartbrew', 'native')));
   }
 
-  /// Returns the entry for [key]. Concurrent builders publish one winner.
+  /// Returns the entry for [key], allowing only one active builder per key.
+  /// Checks cancellation while waiting and immediately before publication.
   Future<Directory> getOrBuild(
     String key,
-    Future<void> Function(Directory work) build,
-  ) async {
+    Future<void> Function(Directory work) build, {
+    void Function()? checkCancelled,
+  }) async {
     if (!RegExp(r'^[a-z0-9]+$').hasMatch(key)) {
       throw ArgumentError.value(key, 'key', 'Expected a cache identifier');
     }
     final entry = Directory(p.join(root.path, key));
+    checkCancelled?.call();
     if (entry.existsSync()) return entry;
-    root.createSync(recursive: true);
-    final work = root.createTempSync('.build-');
-    try {
-      await build(work);
-      if (!entry.existsSync()) {
-        try {
-          work.renameSync(entry.path);
-        } on FileSystemException {
-          if (!entry.existsSync()) rethrow;
-        }
+    final lockDir = Directory(p.join(root.path, '.locks'))
+      ..createSync(recursive: true);
+    final file = File(p.join(lockDir.path, key));
+    if (!Platform.isWindows && !file.existsSync()) file.createSync();
+    while (true) {
+      checkCancelled?.call();
+      final release = tryCacheLock(file);
+      if (release == null) {
+        await Future<void>.delayed(const Duration(milliseconds: 75));
+        continue;
       }
-      return entry;
-    } finally {
-      if (work.existsSync()) work.deleteSync(recursive: true);
+      try {
+        if (entry.existsSync()) return entry;
+        final prefix = '.build-$key-';
+        // The OS may have released the previous owner's lock on a hard
+        // termination. Only that key's unpublished directories are ours.
+        for (final old in root.listSync(followLinks: false)) {
+          if (old is Directory && p.basename(old.path).startsWith(prefix)) {
+            old.deleteSync(recursive: true);
+          }
+        }
+        final work = root.createTempSync(prefix);
+        try {
+          await build(work);
+          checkCancelled?.call();
+          work.renameSync(entry.path);
+          return entry;
+        } finally {
+          if (work.existsSync()) work.deleteSync(recursive: true);
+        }
+      } finally {
+        release();
+      }
     }
   }
 }

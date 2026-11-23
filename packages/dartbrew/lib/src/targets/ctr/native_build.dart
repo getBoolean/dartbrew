@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -146,90 +145,84 @@ final class NativeBuild {
     required String mode,
     required String sdkManifestSha256,
     Stream<Object?>? interrupts,
-  }) async {
-    final Object? plan = jsonDecode(
-      File(asset(compilePlan)).readAsStringSync(),
-    );
-    if (plan case {
-      'schema': 1,
-      'modes': final Map<String, Object?> modes,
-      'cflags': final List<Object?> cflags,
-      'soft_math_source': final String bridge,
-    } when (mode == 'aot' || mode == 'jit') && modes[mode] is List<Object?>) {
-      final units = (modes[mode]! as List<Object?>).map(_Unit.parse).toList();
-      for (final group in _Group.values) {
-        if (!units.any((unit) => unit.group == group)) {
-          throw FormatException(
-            'Compile plan for $mode has no ${group.name} units.',
+    BuildProcesses? processes,
+  }) => BuildProcesses.scoped(
+    start,
+    (processes) async {
+      final Object? plan = jsonDecode(
+        File(asset(compilePlan)).readAsStringSync(),
+      );
+      if (plan case {
+        'schema': 1,
+        'modes': final Map<String, Object?> modes,
+        'cflags': final List<Object?> cflags,
+        'soft_math_source': final String bridge,
+      } when (mode == 'aot' || mode == 'jit') && modes[mode] is List<Object?>) {
+        final units = (modes[mode]! as List<Object?>).map(_Unit.parse).toList();
+        for (final group in _Group.values) {
+          if (!units.any((unit) => unit.group == group)) {
+            throw FormatException(
+              'Compile plan for $mode has no ${group.name} units.',
+            );
+          }
+        }
+        final versions = devkitPro.versions;
+        try {
+          final key = sha256
+              .convert(
+                utf8.encode(
+                  jsonEncode([
+                    sdkManifestSha256,
+                    devkitPro.root,
+                    devkitPro.armRoot,
+                    versions.devkitARM,
+                    versions.libctru,
+                    mode,
+                    if (versions.devkitARM == 'unknown')
+                      await _installationDigest(
+                        Directory(devkitPro.armRoot),
+                        processes,
+                      ),
+                    if (versions.libctru == 'unknown')
+                      await _installationDigest(
+                        Directory(p.join(devkitPro.root, 'libctru')),
+                        processes,
+                      ),
+                  ]),
+                ),
+              )
+              .toString();
+          processes.check();
+          final dir = await _cache.getOrBuild(key, (work) async {
+            await _compile(
+              work,
+              units,
+              _flags(cflags),
+              _sourcePath(bridge),
+              processes,
+            );
+          }, checkCancelled: processes.check);
+          processes.check();
+          return NativeArtifacts._(dir, units);
+        } on DartbrewException catch (error) {
+          if (error.exitCode == 130) rethrow;
+          throw DartbrewException(error.exitCode, _failure(error.message));
+        } on ProcessException catch (error) {
+          throw DartbrewException(
+            error.errorCode > 0 ? error.errorCode : 1,
+            _failure(error.toString()),
           );
+        } on FormatException catch (error) {
+          throw FormatException(_failure(error.message));
         }
       }
-      final versions = devkitPro.versions;
-      final processes = _Processes(start);
-      final signal = (interrupts ?? ProcessSignal.sigint.watch()).listen(
-        (_) => processes.cancel(),
-        onDone: processes.cancel,
+      throw FormatException(
+        'Unsupported or incomplete compile-plan.json for $mode.',
       );
-      final terminate = interrupts == null && !Platform.isWindows
-          ? ProcessSignal.sigterm.watch().listen((_) => processes.cancel())
-          : null;
-      try {
-        final key = sha256
-            .convert(
-              utf8.encode(
-                jsonEncode([
-                  sdkManifestSha256,
-                  devkitPro.root,
-                  devkitPro.armRoot,
-                  versions.devkitARM,
-                  versions.libctru,
-                  mode,
-                  if (versions.devkitARM == 'unknown')
-                    await _installationDigest(
-                      Directory(devkitPro.armRoot),
-                      processes,
-                    ),
-                  if (versions.libctru == 'unknown')
-                    await _installationDigest(
-                      Directory(p.join(devkitPro.root, 'libctru')),
-                      processes,
-                    ),
-                ]),
-              ),
-            )
-            .toString();
-        processes.check();
-        final dir = await _cache.getOrBuild(key, (work) async {
-          await _compile(
-            work,
-            units,
-            _flags(cflags),
-            _sourcePath(bridge),
-            processes,
-          );
-          processes.check();
-        });
-        processes.check();
-        return NativeArtifacts._(dir, units);
-      } on DartbrewException catch (error) {
-        if (error.exitCode == 130) rethrow;
-        throw DartbrewException(error.exitCode, _failure(error.message));
-      } on ProcessException catch (error) {
-        throw DartbrewException(
-          error.errorCode > 0 ? error.errorCode : 1,
-          _failure(error.toString()),
-        );
-      } on FormatException catch (error) {
-        throw FormatException(_failure(error.message));
-      } finally {
-        await signal.cancel();
-        await terminate?.cancel();
-      }
-    }
-    throw FormatException(
-      'Unsupported or incomplete compile-plan.json for $mode.',
-    );
-  }
+    },
+    parent: processes,
+    interrupts: interrupts,
+  );
 
   String _failure(String reason) =>
       '$reason\n${devkitPro.mismatchAdvice(qualified)}';
@@ -238,7 +231,7 @@ final class NativeBuild {
   // GCC's internal tools or multi-lib files under the same path.
   Future<String> _installationDigest(
     Directory root,
-    _Processes processes,
+    BuildProcesses processes,
   ) async {
     if (!root.existsSync()) return 'missing';
     final records = <String>[];
@@ -262,7 +255,7 @@ final class NativeBuild {
     List<_Unit> units,
     List<String> cflags,
     String bridge,
-    _Processes processes,
+    BuildProcesses processes,
   ) async {
     final scratch = Directory(p.join(work.path, 'work'))..createSync();
     final sources = Directory(p.join(scratch.path, 'native-src'))..createSync();
@@ -375,58 +368,5 @@ final class NativeBuild {
     );
     await softMath.rename(p.join(work.path, 'soft-math.o'));
     await scratch.delete(recursive: true);
-  }
-}
-
-/// Owns child lifetimes, including children whose asynchronous startup races
-/// cancellation. All workers drain their children before staging is removed.
-final class _Processes {
-  final ProcessStarter start;
-  final _children = <Process>{};
-  bool _cancelled = false;
-
-  _Processes(this.start);
-
-  void cancel() {
-    _cancelled = true;
-    for (final child in _children) {
-      child.kill();
-    }
-  }
-
-  void check() {
-    if (_cancelled) {
-      throw const DartbrewException(130, 'Native build interrupted.');
-    }
-  }
-
-  Future<String> run(String executable, List<String> arguments) async {
-    check();
-    final process = await start(executable, arguments);
-    _children.add(process);
-    try {
-      if (_cancelled) process.kill();
-      final (out, err, code) = await (
-        process.stdout
-            .transform(const Utf8Decoder(allowMalformed: true))
-            .join(),
-        process.stderr
-            .transform(const Utf8Decoder(allowMalformed: true))
-            .join(),
-        process.exitCode,
-      ).wait;
-      check();
-      if (code != 0) {
-        throw ProcessException(
-          executable,
-          arguments,
-          err.isEmpty ? out : err,
-          code,
-        );
-      }
-      return out;
-    } finally {
-      _children.remove(process);
-    }
   }
 }
