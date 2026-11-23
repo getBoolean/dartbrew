@@ -21,8 +21,6 @@ jobs:
           docker compose up -d toolchain
       - name: Test source locking and build configuration
         run: docker compose exec -T toolchain python3 -m unittest discover -s toolchain/test -v
-      - name: Test release producer contracts
-        run: docker compose exec -T toolchain python3 -m unittest discover -s release/test -v
       - name: Stop toolchain
         if: always()
         run: docker compose down

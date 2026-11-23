@@ -8,5 +8,3 @@ toolchain/*.specs text eol=lf
 
 # Preserve upstream distribution notices byte for byte.
 release/licenses/*.LICENSE -text whitespace=-blank-at-eol
-
-# Recovery donors must match the original producer checksums on every host.
