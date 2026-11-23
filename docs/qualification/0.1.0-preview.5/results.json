@@ -103,5 +103,19 @@
         "azahar_aot": "pending"
       }
     }
-  ]
+  ],
+  "devkitpro": {
+    "devkitARM": "r68-1",
+    "libctru": "2.7.0-1"
+  },
+  "runtime_component": {
+    "producer_host": "linux-x64",
+    "sha256": {
+      "runtime.json": "f0d8174aae33297b220c7c2b49c550c80af0f98979e47e6762e13ceffd01f106",
+      "probe.json": "9bb9196c1fa2bacfc9632b5d2e094d37e6b14c9500e8ba22a07515d24a80e523",
+      "platform.dill": "3556982684b942a78d857606c7975192cc986d308d30bfbfa5452a4bd4d55350",
+      "compile-plan.json": "1026cfe9b0ae4bb837c31d90894d19ef3f468c2207ab8a1f3e46c6665efbf9e1"
+    },
+    "proof": "runtime-probe.json"
+  }
 }
