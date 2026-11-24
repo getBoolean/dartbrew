@@ -1,13 +1,53 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:dartbrew/src/errors.dart';
 import 'package:dartbrew/src/process.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
+Future<void> _runUntilIsolateDeath((String, int) args) async {
+  await BuildProcesses.scoped(startProcess, (scope) async {
+    final process = await scope.start(Platform.resolvedExecutable, [
+      args.$1,
+      args.$2.toString(),
+    ]);
+    await process.exitCode;
+  });
+}
+
 void main() {
+  test('killing the builder isolate reaps its live tools', () async {
+    final work = await Directory.systemTemp.createTemp('dartbrew-owner-death-');
+    addTearDown(() => work.delete(recursive: true));
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(server.close);
+    final tool = File(p.join(work.path, 'witness.dart'));
+    await tool.writeAsString("""
+import 'dart:io';
+Future<void> main(List<String> args) async {
+  final socket = await Socket.connect(InternetAddress.loopbackIPv4, int.parse(args.single));
+  await socket.drain<void>();
+  socket.destroy();
+}
+""");
+    final exited = ReceivePort();
+    addTearDown(exited.close);
+    final builder = await Isolate.spawn(_runUntilIsolateDeath, (
+      tool.path,
+      server.port,
+    ), onExit: exited.sendPort);
+    addTearDown(() => builder.kill(priority: Isolate.immediate));
+    final socket = await server.first.timeout(const Duration(seconds: 20));
+    addTearDown(socket.destroy);
+    final disconnected = socket.drain<void>();
+    builder.kill(priority: Isolate.immediate);
+    await exited.first.timeout(const Duration(seconds: 3));
+    await disconnected.timeout(const Duration(seconds: 3));
+  }, skip: !Platform.isWindows);
+
   test(
     'parallel tools retain argv, cwd, environment and separate byte streams',
     () async {

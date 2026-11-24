@@ -193,15 +193,20 @@ final class NativeBuild {
               )
               .toString();
           processes.check();
-          final dir = await _cache.getOrBuild(key, (work) async {
-            await _compile(
-              work,
-              units,
-              _flags(cflags),
-              _sourcePath(bridge),
-              processes,
-            );
-          }, checkCancelled: processes.check);
+          final dir = await _cache.getOrBuild(
+            key,
+            (work) async {
+              await _compile(
+                work,
+                units,
+                _flags(cflags),
+                _sourcePath(bridge),
+                processes,
+              );
+            },
+            checkCancelled: processes.check,
+            windowsJobName: processes.windowsJobName,
+          );
           processes.check();
           return NativeArtifacts._(dir, units);
         } on DartbrewException catch (error) {

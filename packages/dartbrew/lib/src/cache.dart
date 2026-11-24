@@ -42,6 +42,7 @@ final class NativeCache {
     String key,
     Future<void> Function(Directory work) build, {
     void Function()? checkCancelled,
+    Future<String?> Function()? windowsJobName,
   }) async {
     if (!RegExp(r'^[a-z0-9]+$').hasMatch(key)) {
       throw ArgumentError.value(key, 'key', 'Expected a cache identifier');
@@ -53,25 +54,30 @@ final class NativeCache {
       ..createSync(recursive: true);
     final file = File(p.join(lockDir.path, key));
     if (!Platform.isWindows && !file.existsSync()) file.createSync();
-    return withCacheLock(file, checkCancelled, () async {
-      if (entry.existsSync()) return entry;
-      final prefix = '.build-$key-';
-      // The OS may have released the previous owner's lock on a hard
-      // termination. Only that key's unpublished directories are ours.
-      for (final old in root.listSync(followLinks: false)) {
-        if (old is Directory && p.basename(old.path).startsWith(prefix)) {
-          old.deleteSync(recursive: true);
+    return withCacheLock(
+      file,
+      checkCancelled,
+      await windowsJobName?.call(),
+      () async {
+        if (entry.existsSync()) return entry;
+        final prefix = '.build-$key-';
+        // The OS may have released the previous owner's lock on a hard
+        // termination. Only that key's unpublished directories are ours.
+        for (final old in root.listSync(followLinks: false)) {
+          if (old is Directory && p.basename(old.path).startsWith(prefix)) {
+            old.deleteSync(recursive: true);
+          }
         }
-      }
-      final work = root.createTempSync(prefix);
-      try {
-        await build(work);
-        checkCancelled?.call();
-        work.renameSync(entry.path);
-        return entry;
-      } finally {
-        if (work.existsSync()) work.deleteSync(recursive: true);
-      }
-    });
+        final work = root.createTempSync(prefix);
+        try {
+          await build(work);
+          checkCancelled?.call();
+          work.renameSync(entry.path);
+          return entry;
+        } finally {
+          if (work.existsSync()) work.deleteSync(recursive: true);
+        }
+      },
+    );
   }
 }

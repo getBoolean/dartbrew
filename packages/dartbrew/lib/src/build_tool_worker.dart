@@ -50,19 +50,20 @@ final class BuildToolWorker {
         ..clear()
         ..addAll(['--packages=${config.toFilePath()}', source.toFilePath()]);
     }
-    final process = await Process.start(exe, args);
-    late final ToolGroup group;
+    final job = Platform.isWindows ? await WindowsToolJob.create() : null;
+    late final Process process;
     try {
-      group = ToolGroup(process);
+      process = await Process.start(exe, args, environment: job?.environment);
     } catch (_) {
-      process.kill(ProcessSignal.sigkill);
-      await process.exitCode;
+      await job?.terminate();
       rethrow;
     }
-    final worker = BuildToolWorker._(process, group);
+    final worker = BuildToolWorker._(process, ToolGroup(process, job));
     await worker._ready.future;
     return worker;
   }
+
+  String? get windowsJobName => _group.windowsJob?.name;
 
   Future<void> _read() async {
     Object? failure;
@@ -139,8 +140,9 @@ final class BuildToolWorker {
     final id = _nextId++;
     final child = _ToolProcess(exe, args, (signal) {
       if (_termination != null || !_requests.containsKey(id)) return false;
-      if (signal != ProcessSignal.sigterm && signal != ProcessSignal.sigkill)
+      if (signal != ProcessSignal.sigterm && signal != ProcessSignal.sigkill) {
         return false;
+      }
       _worker.stdin.writeln(
         jsonEncode({'id': id, 'signal': signal.signalNumber}),
       );

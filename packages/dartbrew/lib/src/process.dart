@@ -116,6 +116,15 @@ final class BuildProcesses {
     }
   }
 
+  /// Identifies the build job to a cache owner that can outlive this isolate.
+  Future<String?> windowsJobName() async {
+    if (!Platform.isWindows || _start != startProcess) return null;
+    check();
+    final worker = await (_worker ??= BuildToolWorker.open());
+    check();
+    return worker.windowsJobName;
+  }
+
   /// Starts a child owned by this scope. Callers consume the output streams
   /// and await exit as usual, including when the child has been interrupted.
   Future<Process> start(

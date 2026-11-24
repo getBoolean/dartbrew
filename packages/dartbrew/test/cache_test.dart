@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:dartbrew/src/cache.dart';
+import 'package:dartbrew/src/process.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
@@ -13,6 +14,27 @@ Future<void> _abandonBuild((String, SendPort) request) async {
     File(p.join(stage.path, 'partial')).writeAsStringSync('partial');
     started.send(true);
     await ReceivePort().first;
+  });
+}
+
+Future<void> _buildWithOpenOutput((String, SendPort) request) async {
+  final (root, ready) = request;
+  await BuildProcesses.scoped(startProcess, (processes) async {
+    await NativeCache(Directory(root)).getOrBuild('sample', (stage) async {
+      final tool = await processes.start('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        r"$file = [IO.File]::Open('runtime.o', 'Create', 'Write', 'None');"
+            r"[Console]::WriteLine('open'); Start-Sleep -Seconds 30; $file.Dispose()",
+      ], workingDirectory: stage.path);
+      await tool.stdout
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .firstWhere((line) => line == 'open');
+      ready.send(true);
+      await tool.exitCode;
+    }, windowsJobName: processes.windowsJobName);
   });
 }
 
@@ -101,31 +123,53 @@ void main() {
     },
   );
 
-  test('a killed builder isolate releases its lock in the live VM', () async {
-    final started = ReceivePort();
-    final exited = ReceivePort();
-    addTearDown(started.close);
-    addTearDown(exited.close);
-    final owner = await Isolate.spawn(_abandonBuild, (
-      root.path,
-      started.sendPort,
-    ), onExit: exited.sendPort);
-    await started.first.timeout(const Duration(seconds: 10));
-    final waiter = cache.getOrBuild('sample', (stage) async {
-      File(p.join(stage.path, 'complete')).writeAsStringSync('replacement');
+  for (final (description, build) in [
+    (
+      'a killed builder isolate releases its lock in the live VM',
+      _abandonBuild,
+    ),
+    if (Platform.isWindows)
+      (
+        'waiter recovers staging held open by a dead builder’s native tool',
+        _buildWithOpenOutput,
+      ),
+  ]) {
+    test(description, () async {
+      final started = ReceivePort();
+      final exited = ReceivePort();
+      addTearDown(started.close);
+      addTearDown(exited.close);
+      final owner = await Isolate.spawn(build, (
+        root.path,
+        started.sendPort,
+      ), onExit: exited.sendPort);
+      addTearDown(() => owner.kill(priority: Isolate.immediate));
+      await started.first.timeout(const Duration(seconds: 15));
+      final contended = Completer<void>();
+      var checks = 0;
+      final waiter = cache.getOrBuild(
+        'sample',
+        (stage) async {
+          File(p.join(stage.path, 'complete')).writeAsStringSync('replacement');
+        },
+        checkCancelled: () {
+          if (++checks == 3) contended.complete();
+        },
+      );
+      await contended.future.timeout(const Duration(seconds: 10));
+      owner.kill(priority: Isolate.immediate);
+      await exited.first.timeout(const Duration(seconds: 10));
+      final entry = await waiter.timeout(const Duration(seconds: 10));
+      expect(
+        File(p.join(entry.path, 'complete')).readAsStringSync(),
+        'replacement',
+      );
+      expect(
+        root.listSync().map((f) => p.basename(f.path)),
+        unorderedEquals(['.locks', 'sample']),
+      );
     });
-    owner.kill(priority: Isolate.immediate);
-    await exited.first.timeout(const Duration(seconds: 10));
-    final entry = await waiter.timeout(const Duration(seconds: 10));
-    expect(
-      File(p.join(entry.path, 'complete')).readAsStringSync(),
-      'replacement',
-    );
-    expect(
-      root.listSync().map((f) => p.basename(f.path)),
-      unorderedEquals(['.locks', 'sample']),
-    );
-  });
+  }
 
   Future<({Process process, StreamIterator<String> output})> worker(
     String label, {

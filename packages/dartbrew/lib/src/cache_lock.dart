@@ -5,12 +5,15 @@ import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 
+import 'tool_group.dart';
+
 /// Runs [build] while holding the OS lock. Only cold requests start a lock
 /// owner. It closes its handle even when the build isolate is killed without
 /// unwinding its Dart stack.
 Future<T> withCacheLock<T>(
   File file,
   void Function()? checkCancelled,
+  String? windowsJobName,
   Future<T> Function() build,
 ) async {
   final replies = ReceivePort();
@@ -23,6 +26,7 @@ Future<T> withCacheLock<T>(
       Isolate.current,
       replies.sendPort,
       file.path,
+      windowsJobName,
     ), onExit: replies.sendPort);
     Future<Object> reply() async {
       if (!await messages.moveNext()) {
@@ -54,20 +58,28 @@ Future<T> withCacheLock<T>(
   }
 }
 
-Future<void> _ownCacheLock((Isolate, SendPort, String) request) async {
-  final (builder, replies, path) = request;
+Future<void> _ownCacheLock((Isolate, SendPort, String, String?) request) async {
+  final (builder, replies, path, windowsJobName) = request;
   final commands = ReceivePort();
   final control = commands.sendPort;
   // An immediate ping acknowledges all earlier control messages, including
   // registration of the builder's exit notification. If it already died, no
   // ping arrives. Retire the idle helper without opening a file.
-  builder.addOnExitListener(control);
+  builder.addOnExitListener(control, response: 'builder exited');
   builder.ping(control, response: 'ready');
   final startup = Timer(const Duration(seconds: 30), () => control.send(null));
   void Function()? release;
   try {
     await for (final command in commands) {
       if (command == null) break;
+      if (command == 'builder exited') {
+        // Windows tools can still hold staging files open after isolate death.
+        // Keep ownership until their job has released those handles.
+        if (release != null && windowsJobName != null) {
+          await finishWindowsToolJob(windowsJobName);
+        }
+        break;
+      }
       if (command == 'ready') {
         startup.cancel();
         replies.send(control);
