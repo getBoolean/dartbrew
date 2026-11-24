@@ -90,7 +90,9 @@ final class BuildToolWorker {
           case 'err':
             child._err.add(base64Decode(event[2]! as String));
           case 'exit':
-            child.finish(event[2]! as int);
+            child._exit.complete(event[2]! as int);
+          case 'drained':
+            child.finish();
             _requests.remove(id);
           case 'failure':
             final error = event[2]! as List<Object?>;
@@ -135,7 +137,15 @@ final class BuildToolWorker {
       throw ProcessException(exe, args, 'Build worker stopped.');
     }
     final id = _nextId++;
-    final child = _ToolProcess(exe, args);
+    final child = _ToolProcess(exe, args, (signal) {
+      if (_termination != null || !_requests.containsKey(id)) return false;
+      if (signal != ProcessSignal.sigterm && signal != ProcessSignal.sigkill)
+        return false;
+      _worker.stdin.writeln(
+        jsonEncode({'id': id, 'signal': signal.signalNumber}),
+      );
+      return true;
+    });
     _requests[id] = child;
     _worker.stdin.writeln(
       jsonEncode({
@@ -171,8 +181,9 @@ final class _ToolProcess implements Process {
   final _err = StreamController<List<int>>();
   final _exit = Completer<int>();
   int? _pid;
-  _ToolProcess(this.executable, this.arguments);
-  void finish(int code, [String? failure]) {
+  final bool Function(ProcessSignal signal) _signal;
+  _ToolProcess(this.executable, this.arguments, this._signal);
+  void finish([int code = 0, String? failure]) {
     if (!_started.isCompleted) {
       _started.completeError(
         ProcessException(
@@ -185,7 +196,7 @@ final class _ToolProcess implements Process {
     }
     unawaited(_out.close());
     unawaited(_err.close());
-    _exit.complete(code);
+    if (!_exit.isCompleted) _exit.complete(code);
   }
 
   @override
@@ -200,5 +211,5 @@ final class _ToolProcess implements Process {
   IOSink get stdin => throw UnsupportedError('Build tools do not read stdin.');
   @override
   bool kill([ProcessSignal signal = ProcessSignal.sigterm]) =>
-      !_exit.isCompleted && Process.killPid(pid, signal);
+      !_exit.isCompleted && _signal(signal);
 }

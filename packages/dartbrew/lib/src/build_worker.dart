@@ -23,15 +23,26 @@ Future<void> runBuildWorker() async {
   stdout.writeln('ready');
   await stdout.flush();
 
+  final running = <int, Process>{};
   await for (final line
       in stdin.transform(utf8.decoder).transform(const LineSplitter())) {
     final request = jsonDecode(line) as Map<String, Object?>;
-    unawaited(_run(request));
+    if (request['signal'] case final int number) {
+      final signal = number == ProcessSignal.sigkill.signalNumber
+          ? ProcessSignal.sigkill
+          : ProcessSignal.sigterm;
+      running[request['id']]?.kill(signal);
+    } else {
+      unawaited(_run(request, running));
+    }
   }
   stopOrphanedToolGroup();
 }
 
-Future<void> _run(Map<String, Object?> request) async {
+Future<void> _run(
+  Map<String, Object?> request,
+  Map<int, Process> running,
+) async {
   final id = request['id']! as int;
   void send(String event, Object value) {
     stdout.writeln(jsonEncode([id, event, value]));
@@ -45,14 +56,18 @@ Future<void> _run(Map<String, Object?> request) async {
       environment: (request['env'] as Map<String, Object?>?)
           ?.cast<String, String>(),
     );
+    running[id] = process;
     send('pid', process.pid);
     await process.stdin.close();
-    final (_, _, code) = await (
+    await (
       process.stdout.forEach((chunk) => send('out', base64Encode(chunk))),
       process.stderr.forEach((chunk) => send('err', base64Encode(chunk))),
-      process.exitCode,
+      process.exitCode.then((code) {
+        running.remove(id);
+        send('exit', code);
+      }),
     ).wait;
-    send('exit', code);
+    send('drained', true);
   } on ProcessException catch (e) {
     send('failure', [e.message, e.errorCode]);
   }

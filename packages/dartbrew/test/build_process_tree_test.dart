@@ -95,15 +95,20 @@ Future<void> main(List<String> args) async {
           grandchild.path,
           '${witness.port}',
         ]);
+        final ready = Completer<void>();
         final output = child.stdout
             .transform(utf8.decoder)
             .transform(const LineSplitter())
             .forEach((line) {
-              if (line == 'ready') {
-                elapsed.start();
-                interrupts.add(null);
-              }
+              if (line == 'ready') ready.complete();
             });
+        await ready.future;
+        // The driver exited while its descendant still owns the output pipe.
+        // A journal observer sees that exit and disposal cannot signal its PID.
+        expect(await child.exitCode.timeout(const Duration(seconds: 4)), 0);
+        expect(child.kill(), isFalse);
+        elapsed.start();
+        interrupts.add(null);
         await Future.wait([output, child.stderr.drain<void>(), child.exitCode]);
       }, interrupts: interrupts.stream);
       await expectLater(
