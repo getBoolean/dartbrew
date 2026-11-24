@@ -6,33 +6,39 @@ import 'package:dartbrew/src/commands/run.dart';
 import 'package:dartbrew/src/device/azahar_device.dart';
 import 'package:dartbrew/src/device/console_device.dart';
 import 'package:dartbrew/src/device/device.dart';
+import 'package:dartbrew/src/device/device_choice.dart';
+import 'package:dartbrew/src/device/run_identity.dart';
 import 'package:dartbrew/src/device/stream.dart';
 import 'package:dartbrew/src/device/verdict.dart';
 import 'package:dartbrew/src/targets/ctr/netloader.dart';
 import 'package:dartbrew/src/targets/ctr/pipeline.dart';
-import 'package:dartbrew/src/targets/target.dart';
 import 'package:test/test.dart';
 
-const _identity = <String, Object>{
-  'schema': 2,
-  'run_id': '0123456789abcdef0123456789abcdef',
-  'fixture': 'hello',
-  'mode': 'jit',
-  'compatibility': 'ctr-jit-1',
-  'artifact_sha256': 'a',
-  'build_id': 'b',
-  'environment': 'hardware',
-};
+const _identity = RunIdentity(
+  schema: 2,
+  runId: '0123456789abcdef0123456789abcdef',
+  fixture: 'hello',
+  mode: BuildMode.jit,
+  compatibility: 'ctr-jit-1',
+  artifactSha256: 'a',
+  buildId: 'b',
+  environment: RunEnvironment.hardware,
+);
 
 String _record(Map<String, Object?> fields) =>
-    'CTR_RUNTIME ${jsonEncode({...fields, 'run_id': _identity['run_id']})}\n';
+    'CTR_RUNTIME ${jsonEncode({...fields, 'run_id': _identity.runId})}\n';
 
 /// The records of a passing run of [_identity].
 String _passingRun() => [
   _record({
     'event': 'begin',
-    for (final entry in _identity.entries)
-      if (entry.key != 'run_id') entry.key: entry.value,
+    'schema': 2,
+    'fixture': 'hello',
+    'mode': 'jit',
+    'compatibility': 'ctr-jit-1',
+    'artifact_sha256': 'a',
+    'build_id': 'b',
+    'environment': 'hardware',
   }),
   _record({'event': 'output', 'text': 'hello'}),
   _record({'event': 'assert', 'name': 'cleanup', 'status': 'pass'}),
@@ -46,13 +52,13 @@ final class _FakeDevice implements RunDevice {
   _FakeDevice({required this.accepts, required this.onLaunch});
 
   @override
-  String get environment => 'hardware';
+  RunEnvironment get environment => RunEnvironment.hardware;
 
   @override
   bool acceptsPeer(InternetAddress address) => accepts(address);
 
   @override
-  Future<void> launch(File app, Map<String, Object> identity, int hostPort) =>
+  Future<void> launch(File app, RunIdentity identity, int hostPort) =>
       onLaunch(hostPort);
 
   @override
@@ -65,17 +71,15 @@ Future<bool> _closedByHost(Socket socket, Duration within) => socket
     .then((_) => true, onError: (Object _) => true)
     .timeout(within, onTimeout: () => false);
 
-DeviceRunSettings _settings({required bool azahar}) => DeviceRunSettings(
-  target: targets[defaultTarget]!,
+DeviceRunSettings _settings(DeviceChoice device) => DeviceRunSettings(
   mode: BuildMode.jit,
-  address: null,
+  device: device,
   wait: Duration.zero,
   timeout: null,
   hostPort: defaultHostPort,
   project: '.',
   offline: false,
   sdkPath: '.',
-  azahar: azahar,
 );
 
 void main() {
@@ -126,6 +130,85 @@ void main() {
       expect(result.verdict.output, ['hello']);
     });
 
+    test(
+      'forwards input to the app and ends it by closing the host side',
+      () async {
+        final listener = await ServerSocket.bind(
+          InternetAddress.loopbackIPv4,
+          0,
+        );
+        addTearDown(listener.close);
+        final received = <int>[];
+        final device = _FakeDevice(
+          accepts: (_) => true,
+          onLaunch: (port) async {
+            final app = await Socket.connect(
+              InternetAddress.loopbackIPv4,
+              port,
+            );
+            // The app reads stdin to its end, then reports and closes.
+            app.listen(
+              received.addAll,
+              onDone: () async {
+                app.write(_passingRun());
+                await app.flush();
+                await app.close();
+              },
+            );
+          },
+        );
+
+        final result = await runOnDevice(
+          device: device,
+          app: File('unused.3dsx'),
+          identity: _identity,
+          listener: listener,
+          input: () => Stream.fromIterable([
+            utf8.encode('line one\n'),
+            utf8.encode('line two\n'),
+          ]),
+          deadlines: const RunDeadlines(
+            connect: Duration(seconds: 5),
+            idle: Duration(seconds: 5),
+          ),
+        );
+
+        expect(utf8.decode(received), 'line one\nline two\n');
+        expect(result.verdict.outcome, Outcome.pass);
+      },
+    );
+
+    test('stops reading input that never ends when the run ends', () async {
+      final listener = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(listener.close);
+      final input = StreamController<List<int>>();
+      final device = _FakeDevice(
+        accepts: (_) => true,
+        onLaunch: (port) async {
+          final app = await Socket.connect(InternetAddress.loopbackIPv4, port);
+          app.listen((_) {}, onError: (Object _) {});
+          app.write(_passingRun());
+          await app.flush();
+          await app.close();
+        },
+      );
+
+      final result = await runOnDevice(
+        device: device,
+        app: File('unused.3dsx'),
+        identity: _identity,
+        listener: listener,
+        input: () => input.stream,
+        deadlines: const RunDeadlines(
+          connect: Duration(seconds: 5),
+          idle: Duration(seconds: 5),
+        ),
+      );
+
+      expect(result.verdict.outcome, Outcome.pass);
+      expect(input.hasListener, isFalse);
+    });
+
     test('a console accepts only its own address', () {
       final device = ConsoleDevice(
         NetloaderClient(),
@@ -146,18 +229,24 @@ void main() {
         'unless an address is given', () {
       final runner = DeviceRunner();
       expect(
-        runner.listenAddressFor(_settings(azahar: true)),
+        runner.listenAddressFor(_settings(const Azahar(null))),
         InternetAddress.loopbackIPv4,
       );
       expect(
-        runner.listenAddressFor(_settings(azahar: false)),
+        runner.listenAddressFor(_settings(const DiscoverConsole())),
+        InternetAddress.anyIPv4,
+      );
+      expect(
+        runner.listenAddressFor(
+          _settings(ConsoleAt(InternetAddress('192.168.1.20'))),
+        ),
         InternetAddress.anyIPv4,
       );
       final given = InternetAddress('127.0.0.5');
       expect(
         DeviceRunner(
           listenAddress: given,
-        ).listenAddressFor(_settings(azahar: true)),
+        ).listenAddressFor(_settings(const Azahar(null))),
         given,
       );
     });

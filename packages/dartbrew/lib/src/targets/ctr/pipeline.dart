@@ -4,10 +4,14 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
+import 'package:yaml/yaml.dart';
 
+import '../../devkitpro.dart';
 import '../../process.dart';
 import '../../sdk.dart';
 import '../../stage_runner.dart';
+import 'link_template.dart';
+import 'native_build.dart';
 import 'native_elf.dart';
 import 'smdh.dart';
 
@@ -30,21 +34,28 @@ final fixturePattern = RegExp('^[A-Za-z0-9_-]{1,$fixtureMaxLength}\$');
 /// or the entry file's base name when there is no pubspec name, reduced to
 /// [fixturePattern].
 String fixtureFor(String project, String entry) {
-  final pubspec = File(p.join(project, 'pubspec.yaml'));
-  final name = pubspec.existsSync()
-      ? RegExp(
-          r'''^name:[ \t]*['"]?([^\s'"#]+)''',
-          multiLine: true,
-        ).firstMatch(pubspec.readAsStringSync())?.group(1)
-      : null;
-  var token = (name ?? p.basenameWithoutExtension(entry)).replaceAll(
-    RegExp(r'[^A-Za-z0-9_-]'),
-    '_',
-  );
+  var token = (_pubspecName(project) ?? p.basenameWithoutExtension(entry))
+      .replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
   if (token.length > fixtureMaxLength) {
     token = token.substring(0, fixtureMaxLength);
   }
   return token.isEmpty ? 'app' : token;
+}
+
+/// The string `name` of [project]'s `pubspec.yaml`, or null when it has
+/// none. A pubspec that is not valid YAML also gives null; the build's
+/// `packages` stage reports it.
+String? _pubspecName(String project) {
+  final pubspec = File(p.join(project, 'pubspec.yaml'));
+  if (!pubspec.existsSync()) return null;
+  try {
+    return switch (loadYaml(pubspec.readAsStringSync())) {
+      {'name': final String name} => name,
+      _ => null,
+    };
+  } on YamlException {
+    return null;
+  }
 }
 
 /// The kernel compiler arguments that compile [entry] to [output] for
@@ -57,7 +68,7 @@ List<String> kernelArguments(
   required String entry,
 }) => [
   if (mode == BuildMode.aot) '--aot',
-  '--platform=${sdk.asset(sdk.runtime['platform'] as String)}',
+  '--platform=${sdk.asset(sdk.manifest.runtime.platform)}',
   if (packageConfig.existsSync()) '--packages=${packageConfig.path}',
   '--output=$output',
   entry,
@@ -78,7 +89,7 @@ final class CtrBuild {
   final String sdkManifestSha256;
 
   /// The runtime's `sdk_head` value from the SDK manifest.
-  final Object? sdkHead;
+  final String sdkHead;
 
   const CtrBuild({
     required this.application,
@@ -147,15 +158,21 @@ Future<CtrBuild> buildCtrApplication({
   required File application,
   bool offline = false,
   ProcessStarter start = startProcess,
-  IOSink? progress,
   StringSink? warnings,
-}) async {
+  Map<String, String>? environment,
+  BuildProcesses? processes,
+}) => BuildProcesses.scoped(start, (processes) async {
   final smdh = projectSmdh(
     project,
     fallbackTitle: p.basenameWithoutExtension(entry),
     warnings: warnings ?? stderr,
   );
-  final run = StageRunner(sdk, work, start: start, progress: progress);
+  final run = StageRunner(sdk, work, start: processes.start);
+  final devkitPro = await DevkitPro.discover(
+    environment: environment,
+    start: processes.start,
+  );
+  final advice = devkitPro.mismatchAdvice(sdk.manifest.runtime.devkitPro);
   final aot = mode == BuildMode.aot;
 
   final packageConfig = File(p.join(project, '.dart_tool/package_config.json'));
@@ -192,11 +209,14 @@ Future<CtrBuild> buildCtrApplication({
       '.incbin "application.dill"\n.section .note.GNU-stack,"",%progbits\n',
     );
   }
-  final runtime = sdk.runtime;
-  final profile = (runtime['modes'] as Map)[mode.name] as Map;
-  final compatibility = profile['compatibility'] as String;
+  final runtime = sdk.manifest.runtime;
+  final profile = switch (mode) {
+    BuildMode.aot => runtime.aot,
+    BuildMode.jit => runtime.jit,
+  };
+  final compatibility = profile.compatibility;
   final payloadHash = await fileDigest(File(aot ? assembly.path : kernel));
-  final sdkHash = await fileDigest(File(p.join(sdk.root, 'sdk.json')));
+  final sdkHash = sdk.manifestSha256;
   final buildId = sha256
       .convert(
         utf8.encode(jsonEncode([sdkHash, mode.name, fixture, payloadHash])),
@@ -213,45 +233,51 @@ Future<CtrBuild> buildCtrApplication({
       ),
     );
   for (final source in [assembly, program]) {
-    await run('as', [
-      '-march=armv6k',
-      '-mfpu=vfp',
-      '-mfloat-abi=hard',
-      source.path,
-      '-o',
-      p.setExtension(source.path, '.o'),
-    ], 'assemble-${p.basenameWithoutExtension(source.path)}');
+    await run(
+      'as',
+      [
+        '-march=armv6k',
+        '-mfpu=vfp',
+        '-mfloat-abi=hard',
+        source.path,
+        '-o',
+        p.setExtension(source.path, '.o'),
+      ],
+      'assemble-${p.basenameWithoutExtension(source.path)}',
+      executable: devkitPro.tool('as'),
+      failureAdvice: advice,
+    );
   }
-  final link = runtime['link'] as Map;
-  List<String> assets(String key) =>
-      (link[key] as List).cast<String>().map(sdk.asset).toList();
   final elf = File(p.join(work.path, 'application.elf'));
-  await run('ld', [
-    '--defsym=__sync_synchronize=__sync_synchronize_cp15dmb',
-    '-X',
-    '-T',
-    sdk.asset(link['layout'] as String),
-    '-d',
-    '--emit-relocs',
-    '--use-blx',
-    '--gc-sections',
-    '-u',
-    '__sync_synchronize_cp15dmb',
-    '-Map=${p.join(work.path, 'link.map')}',
-    '-o',
-    elf.path,
-    ...assets('startup'),
-    ...(profile['objects'] as List).cast<String>().map(sdk.asset),
-    p.join(work.path, 'program.o'),
-    p.join(work.path, 'payload.o'),
-    sdk.asset(link['math'] as String),
-    sdk.asset(profile['archive'] as String),
-    ...assets('libraries'),
-    '--start-group',
-    ...assets('grouped'),
-    '--end-group',
-    ...assets('end'),
-  ], 'link');
+  final native = await NativeBuild(
+    sdk: sdk,
+    devkitPro: devkitPro,
+    environment: environment,
+    start: start,
+  ).build(mode: mode.name, sdkManifestSha256: sdkHash, processes: processes);
+  final linkArguments = await ctrLinkArguments(
+    runtime.linkTemplate,
+    launcher: native.launcherObjects,
+    outputs: {
+      'map': p.join(work.path, 'link.map'),
+      'elf': elf.path,
+      'program': p.join(work.path, 'program.o'),
+      'payload': p.join(work.path, 'payload.o'),
+      'soft_math': native.softMath,
+      'io': native.ioArchive,
+      'runtime': native.runtimeArchive,
+    },
+    targetFile: devkitPro.targetFile,
+  );
+  await run(
+    'ld',
+    linkArguments,
+    'link',
+    executable: devkitPro.tool('ld'),
+    failureAdvice: advice,
+  );
+  final elfHash = await fileDigest(elf);
+  processes.check();
   final artifact = encode3dsx(elf.readAsBytesSync(), smdh: smdh);
   application.writeAsBytesSync(artifact);
   return CtrBuild(
@@ -263,8 +289,8 @@ Future<CtrBuild> buildCtrApplication({
     buildId: buildId,
     artifactSha256: sha256.convert(artifact).toString(),
     payloadSha256: payloadHash,
-    elfSha256: await fileDigest(elf),
+    elfSha256: elfHash,
     sdkManifestSha256: sdkHash,
-    sdkHead: runtime['sdk_head'],
+    sdkHead: runtime.sdkHead,
   );
-}
+}, parent: processes);

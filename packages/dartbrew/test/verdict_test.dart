@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dartbrew/src/device/run_identity.dart';
 import 'package:dartbrew/src/device/stream.dart';
 import 'package:dartbrew/src/device/verdict.dart';
+import 'package:dartbrew/src/targets/ctr/pipeline.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
@@ -14,6 +16,7 @@ typedef Case = ({
   Outcome outcome,
   String? reason,
   List<String> output,
+  int? exitCode,
 });
 
 final vectors = _loadVectors();
@@ -21,15 +24,7 @@ final vectors = _loadVectors();
 List<Case> _loadVectors() {
   // Tests run with the package root as the working directory.
   final file = File(
-    p.join(
-      Directory.current.path,
-      '..',
-      '..',
-      'runtime',
-      'ctr',
-      'test',
-      'verdict_vectors.json',
-    ),
+    p.join(Directory.current.path, 'test', 'data', 'verdict_vectors.json'),
   );
   final json = jsonDecode(file.readAsStringSync()) as Map<String, Object?>;
   Case parse(Map<String, Object?> c) {
@@ -45,6 +40,7 @@ List<Case> _loadVectors() {
       outcome: Outcome.values.byName(expect['outcome']! as String),
       reason: expect['reason'] as String?,
       output: (expect['output']! as List<Object?>).cast<String>(),
+      exitCode: expect['exit_code'] as int?,
     );
   }
 
@@ -54,6 +50,18 @@ List<Case> _loadVectors() {
   ];
 }
 
+/// The run identity a vector's `identity` object describes.
+RunIdentity runIdentityFrom(Map<String, Object?> json) => RunIdentity(
+  schema: json['schema']! as int,
+  runId: json['run_id']! as String,
+  fixture: json['fixture']! as String,
+  mode: BuildMode.values.byName(json['mode']! as String),
+  compatibility: json['compatibility']! as String,
+  artifactSha256: json['artifact_sha256']! as String,
+  buildId: json['build_id']! as String,
+  environment: RunEnvironment.values.byName(json['environment']! as String),
+);
+
 List<int> journalBytes(List<String> lines) => utf8.encode(lines.join('\n'));
 
 Verdict verdictOf(
@@ -62,7 +70,7 @@ Verdict verdictOf(
   Observation? observation,
 ]) {
   final parser = RuntimeLineParser();
-  final accumulator = VerdictAccumulator(identity);
+  final accumulator = VerdictAccumulator(runIdentityFrom(identity));
   for (final chunk in chunks) {
     parser.feed(chunk).forEach(accumulator.add);
   }
@@ -99,6 +107,7 @@ void main() {
         expect(verdict.outcome, c.outcome);
         expect(verdict.reason, c.reason);
         expect(verdict.output, c.output);
+        expect(verdict.exitCode, c.exitCode);
       });
 
       test('${c.name} (one byte at a time)', () {
@@ -108,6 +117,7 @@ void main() {
         expect(verdict.outcome, c.outcome);
         expect(verdict.reason, c.reason);
         expect(verdict.output, c.output);
+        expect(verdict.exitCode, c.exitCode);
       });
     }
   });
@@ -129,7 +139,7 @@ void main() {
     final older = {...identity, 'run_id': '0' * 32};
 
     test('before the current begin are ignored', () {
-      final accumulator = VerdictAccumulator(identity);
+      final accumulator = VerdictAccumulator(runIdentityFrom(identity));
       final printed = printedFrom(accumulator, [
         line({...older, 'event': 'begin'}),
         line({...record(older, 'output'), 'text': 'old'}),
@@ -140,7 +150,7 @@ void main() {
     });
 
     test('after the current begin make the verdict incomplete', () {
-      final accumulator = VerdictAccumulator(identity);
+      final accumulator = VerdictAccumulator(runIdentityFrom(identity));
       final printed = printedFrom(accumulator, [
         lines[0],
         line({...record(older, 'output'), 'text': 'old'}),
@@ -155,7 +165,9 @@ void main() {
 
   group('parser', () {
     test('output text is offered as each record completes', () {
-      final accumulator = VerdictAccumulator(vectors.first.identity);
+      final accumulator = VerdictAccumulator(
+        runIdentityFrom(vectors.first.identity),
+      );
       final parser = RuntimeLineParser();
       final bytes = utf8.encode('${vectors.first.lines.join('\n')}\n');
       final printed = <String>[];
@@ -216,6 +228,23 @@ void main() {
       }
     });
 
+    test('fail with an exit code exits with that code', () {
+      const exited = Verdict(Outcome.fail, null, [], exitCode: 3);
+      expect(exitFor(exited, StreamEnd.closed).code, 3);
+    });
+
+    test('fail with exit code 0 still exits 255', () {
+      const cleanupFailed = Verdict(Outcome.fail, null, [], exitCode: 0);
+      expect(exitFor(cleanupFailed, StreamEnd.closed).code, 255);
+    });
+
+    test('exit codes a process cannot exit with become 255', () {
+      for (final code in [256, -1, 1000]) {
+        final verdict = Verdict(Outcome.fail, null, [], exitCode: code);
+        expect(exitFor(verdict, StreamEnd.closed).code, 255);
+      }
+    });
+
     test('terminal incomplete says it stopped on the console', () {
       final exit = exitFor(stopped, StreamEnd.closed);
       expect((exit.code, exit.message), (1, 'stopped on console'));
@@ -240,7 +269,9 @@ void main() {
     });
 
     test('an empty journal is a lost connection', () {
-      final verdict = VerdictAccumulator(vectors.first.identity).finish();
+      final verdict = VerdictAccumulator(
+        runIdentityFrom(vectors.first.identity),
+      ).finish();
       expect(exitFor(verdict, StreamEnd.closed).message, 'lost connection');
     });
   });

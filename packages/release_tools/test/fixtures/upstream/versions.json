@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "dart": {
+    "version": "3.14.0-315.3.beta",
+    "revision": "f6300bc9c8d2015d2865687987728885cd32277f",
+    "repository": "https://github.com/dart-lang/sdk.git"
+  },
+  "patches": [
+    {
+      "path": "patches/dart/0001-ctr-toolchain.patch",
+      "sha256": "639ab0c46554c17a51b945111a41f023b90af92823ed656297677959d966c416"
+    },
+    {
+      "path": "patches/dart/0002-separate-runtime-graphs.patch",
+      "sha256": "79a37656d5834d617f79a0cae5e91d5803d436be80e7acd95ca549ec4868300f"
+    },
+    {
+      "path": "patches/dart/0003-ctr-armv6k.patch",
+      "sha256": "1c6814ab37ce56bb8a2f4e3256c08b01517e3e387ac55ae5ea48685ef8370f6f"
+    },
+    {
+      "path": "patches/dart/0004-ctr-os-concurrency.patch",
+      "sha256": "9d2fee5509f930c76daadc7672ea3316f7fea228c603c0e0da965f9bc1d4dda8"
+    },
+    {
+      "path": "patches/dart/0005-ctr-thread-shutdown.patch",
+      "sha256": "8378c5c11dc8b9d33521b1a5ac4ddd17b6ba0f668ecba7947418880ffc2f5ca3"
+    },
+    {
+      "path": "patches/dart/0006-ctr-native-diagnostics.patch",
+      "sha256": "4ff97c9296d3da73447991710f08b7824951d301c4594c3cad157f5bc1679ad4"
+    },
+    {
+      "path": "patches/dart/0007-ctr-static-library-resolution.patch",
+      "sha256": "eeeebbc3913f5d60634f0f8ad3d505c05098d62dc9afa5e77335bf8da8486c3e"
+    },
+    {
+      "path": "patches/dart/0008-ctr-software-double.patch",
+      "sha256": "870f8de08737981e2863e83b2600a4a97db1974bcaaf35509cd4cbd5f5ae87eb"
+    },
+    {
+      "path": "patches/dart/0009-ctr-virtual-memory.patch",
+      "sha256": "b02f268617a639d127dacddc52b0858cbef1034608a8eb9f1fc779038c7bd6bb"
+    },
+    {
+      "path": "patches/dart/0010-ctr-native-runtime-integration.patch",
+      "sha256": "4ab183a028fb5023fa9a43ab7f145f53c02b171b6f3659992607e796f5a413b4"
+    },
+    {
+      "path": "patches/dart/0011-ctr-decimal-semantics.patch",
+      "sha256": "7db6c93293b1e1e8dac7b893babec3bf1918e606f5ec38ee6ece8aef5c473882"
+    },
+    {
+      "path": "patches/dart/0012-ctr-embedder-async.patch",
+      "sha256": "3a394426a82be42dbe5d81f70c6044bf8b85665f0040f888130a17e1d85f264e"
+    },
+    {
+      "path": "patches/dart/0013-runtime-entry-offsets.patch",
+      "sha256": "1a1cb40c0840f2c7670b9bd4dee7dc0d335c1ff34fd47a47bf12eef09018e785"
+    },
+    {
+      "path": "patches/dart/0014-host-shared-library-link.patch",
+      "sha256": "315047a0086b49e29b768eb92d523a182b626592a791ed58778c6a5f5d903535"
+    },
+    {
+      "path": "patches/dart/0015-profiler-link-guards.patch",
+      "sha256": "3fa0aa68f547401857cae33a3c15714b2da9588aaa6a3540ae8e19ae8564a9d2"
+    },
+    {
+      "path": "patches/dart/0016-ctr-native-symbols.patch",
+      "sha256": "9b7b0b61ce3e1ad6a0aef7d9ac4408cc1d03ff401f3c8c542f6026189d214c36"
+    },
+    {
+      "path": "patches/dart/0017-ctr-libc-tls-contracts.patch",
+      "sha256": "fb7ab103921cca0ad84bd97c6d0732718f618d0e71628baf2ae50391960a2b53"
+    },
+    {
+      "path": "patches/dart/0018-ctr-aot-image-assembly.patch",
+      "sha256": "7306093fed42b2e6ec129137a59f04064621089d682b7582e46f741dc4a522f4"
+    },
+    {
+      "path": "patches/dart/0019-ctr-source-report-profiler.patch",
+      "sha256": "71dac4d624f5eb2204aaa4cfec452586c605249857b8b80181f4635057df6622"
+    },
+    {
+      "path": "patches/dart/0020-ctr-profiler-types.patch",
+      "sha256": "b9a92f165a2cc4403cd31cd7366091d1aca2472ff763180945ba264a88cad5fd"
+    },
+    {
+      "path": "patches/dart/0021-ctr-double-comparisons.patch",
+      "sha256": "97532f322e80b5129b0137482d47945d7c2b94c90cf9ca6820548370a21a915b"
+    },
+    {
+      "path": "patches/dart/0022-ctr-double-minmax.patch",
+      "sha256": "b9a3f9007b539d778358e1581a7d51c4b4f73a2078521127267c0c2fd0a51e91"
+    },
+    {
+      "path": "patches/dart/0023-ctr-float-conversions.patch",
+      "sha256": "c7c7d0be04b04e087962eb26fafdea7a5e83e6ef2eb95f7787f1d3497888da1f"
+    },
+    {
+      "path": "patches/dart/0024-float-entry-offsets.patch",
+      "sha256": "51615de7cb8478ca0ffc41723f81352cc0f73f798b37ed5ae69adf3db321f83a"
+    },
+    {
+      "path": "patches/dart/0025-ctr-software-sqrt.patch",
+      "sha256": "03870d0c9264c78596b41d94aa9d81254606bc4ab5aeac9c9dab5946cb586dc7"
+    },
+    {
+      "path": "patches/dart/0026-sqrt-entry-offsets.patch",
+      "sha256": "59e001e952e2b7919a3798057be980cb0774e6aba72d040ed324c3074dc921ed"
+    },
+    {
+      "path": "patches/dart/0027-ctr-power-shortcuts.patch",
+      "sha256": "265f1af2671099949376e72e9f6d75aaf904ed8e0918a79fac656d387d5ec2b2"
+    },
+    {
+      "path": "patches/dart/0028-ctr-software-remainder.patch",
+      "sha256": "e435e0d4ad7265cebf828c2367a6080709b6a325f6131a0c7d5c8271d6166978"
+    },
+    {
+      "path": "patches/dart/0029-ctr-software-libm.patch",
+      "sha256": "952e5e81f914efff07f2dbe02bacd9d4cfb0b94215be18b199be69a1604987db"
+    },
+    {
+      "path": "patches/dart/0030-ctr-memory-restoration.patch",
+      "sha256": "bc9b0618a540b3c5e52a83fb5e910027bde39195ad99300ec9b2b142162b1f28"
+    },
+    {
+      "path": "patches/dart/0031-ctr-memory-region-protection.patch",
+      "sha256": "9ac4f3b3d2f5c9aeb54b49a58033572b4a69c2cb8a389bb3314da9226cd84099"
+    },
+    {
+      "path": "patches/dart/0032-ctr-global-worker-budget.patch",
+      "sha256": "e18a0c17892848fad8704577bf09657eeea5ac75e354a5c597e2d8734cba811e"
+    },
+    {
+      "path": "patches/dart/0033-ctr-uri-base.patch",
+      "sha256": "dc57e6aba9f229e4a8cd0732ab6d82cdb7b719f0cbc6f97d51c1cc8fb74522eb"
+    },
+    {
+      "path": "patches/dart/0034-ctr-io-port.patch",
+      "sha256": "cc6a4d0f22397566ae6d3391db614d6e2124ff01d1b892d4d119930d3ffd3713"
+    },
+    {
+      "path": "patches/dart/0035-ctr-eventhandler.patch",
+      "sha256": "0116ebab2b4f5b8388b57c6e3751c6a085147b0830441ebd8db23c53bca007d6"
+    },
+    {
+      "path": "patches/dart/0036-ctr-files.patch",
+      "sha256": "5782b76994d214a727d067a78f27a8a4d8fdbdd11ec4b77310eb30b80d898ff9"
+    },
+    {
+      "path": "patches/dart/0037-ctr-platform-stdio.patch",
+      "sha256": "0bdee7d532cb703ebd145a4b8444a9ca079525dd904e03d932ddf1b2981c5f94"
+    }
+  ],
+  "dependencies": {
+    "depot_tools": {
+      "repository": "https://chromium.googlesource.com/chromium/tools/depot_tools.git",
+      "revision": "006c1455f9ac26d03cafdf337003fdc3144dbff3"
+    },
+    "dart_deps": {
+      "path": "DEPS",
+      "sha256": "d51a35c1d649af503d14ad1617f34473efd50b0991228387a7c42444ccef9303"
+    },
+    "gn": {
+      "revision": "git_revision:510ec7992c30f172205792f190e96111a896ba8f",
+      "hosts": {
+        "linux-x64": {
+          "package": "gn/gn/linux-amd64",
+          "archive_sha256": "402646b59942320614e10669ef063de3851f234a89e7d95cd4b4b3b2a110d709",
+          "binary_sha256": "520e5777cefd31f3202cd65cc4ddd68fcc7edbcd55ec10c5254ff44ba767d809"
+        },
+        "windows-x64": {
+          "package": "gn/gn/windows-amd64",
+          "archive_sha256": "174d11dc7bc18bf7cbcb1bc79571905afd2740ae9bc531b63818a9e89c59c9be",
+          "binary_sha256": "e98db2df9cc672d49db57fe0f70515800c82156216ec5d2a3c8c59d7defcbccb"
+        },
+        "macos-x64": {
+          "package": "gn/gn/mac-amd64",
+          "archive_sha256": "dfa7d1aeba11768c96880c6603b5b13adbd6d620107d418f7bc72f15825955a6",
+          "binary_sha256": "f99a46eabce062a0ec79257d73fbc2e025b40d814220bb8aaf675322a6de59d3"
+        },
+        "macos-arm64": {
+          "package": "gn/gn/mac-arm64",
+          "archive_sha256": "a6de52657f3d01a073b00aa91db512f85d3ae9d2b2c0ad46949cda4e8204f62a",
+          "binary_sha256": "8b50f57cfac9eba62f07ce5d9ad15d738c6bfeb6e58de33fe2b586800545bee6"
+        }
+      }
+    },
+    "clang": "git_revision:3493720eca95cf844a8d7e58fdd12e0e5644e7d0",
+    "ninja": "version:3@1.13.2.chromium.4",
+    "gclient_variables": {
+      "checkout_javascript_engines": false,
+      "download_android_deps": false,
+      "download_fuchsia_deps": false,
+      "download_reclient": false,
+      "build_devtools_from_source": false
+    },
+    "icu": {
+      "repository": "https://chromium.googlesource.com/chromium/deps/icu.git",
+      "revision": "d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738",
+      "patches": [
+        {
+          "path": "patches/icu/0010-ctr-newlib-portability.patch",
+          "sha256": "a8f2e2b6acdd75065ecb8c5446d6fa55bde257f48b342ea06a5ee8e9b9cd658f"
+        }
+      ]
+    }
+  },
+  "container": {
+    "image": "devkitpro/devkitarm@sha256:116afba8df8453961de2936ffab20dd441edf4d682856c1ec8b0e53d7ed0bbf5",
+    "devkitARM": "r68-1",
+    "gcc": "16.1.0",
+    "libctru": "2.7.0-1"
+  },
+  "formats": {
+    "core_image": "patched-sdk-derived",
+    "snapshot": "patched-sdk-derived"
+  }
+}

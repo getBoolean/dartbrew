@@ -90,9 +90,8 @@ File writeTestEntrypoint({
 /// in [names] and contains every string in [plainNames]. Event IDs start at
 /// [firstId].
 ///
-/// The program uses no `dart:io`, since the CTR launcher does not bootstrap
-/// it, and only Dart 2.12 syntax, since it takes the project's language
-/// version.
+/// The program imports no `dart:io`, and uses only Dart 2.12 syntax, since
+/// it takes the project's language version.
 String testEntrypointSource({
   required List<String> imports,
   required List<String> paths,
@@ -128,8 +127,7 @@ void _emit(String type, Map<String, Object?> fields) {
   Zone.root.print(${literal(testEventMarker)} + jsonEncode(fields));
 }
 
-/// Formats [trace] without letting a formatting failure end the run:
-/// `package:stack_trace` chains may need `Uri.base`, which CTR lacks.
+/// Formats [trace] without letting a formatting failure end the run.
 String _trace(StackTrace trace) {
   try {
     return trace.toString();

@@ -1,0 +1,142 @@
+{
+  "host": "windows-x64",
+  "sdk_archive": "dartbrew-0.1.0-preview.5-windows-x64.zip",
+  "sdk_sha256": "833d8d5c1fe8a28996aa78272ad28a7cecd5398f22e7e4c203959e3bab7a1c49",
+  "sdk_manifest_sha256": "738df04cb3039fcb2407f14f09def23472122f2e3dc353c087a2faef9d84b6a2",
+  "files": 2412,
+  "devkitpro": {
+    "devkitARM": "r68-1",
+    "libctru": "2.7.0-1"
+  },
+  "code_generation": {
+    "match": "dwarf-producer-host-only",
+    "sha256": "854c6cc0ea57e77f0266082f63ce883188f319b96bc9b6cabfab94d142daead6",
+    "comparable_sha256": "0b385a8fd352204d42a08717cb8733e82a03fbb7fccf210517a5b7cf70f911cc"
+  },
+  "dependency_audit": {
+    "host-dart/bin/utils/wasm-opt.exe": {
+      "dependencies": [
+        "kernel32.dll",
+        "shell32.dll"
+      ]
+    },
+    "host-dart/bin/utils/gen_snapshot.exe": {
+      "dependencies": [
+        "api-ms-win-core-path-l1-1-0.dll",
+        "bcrypt.dll",
+        "dbghelp.dll",
+        "kernel32.dll",
+        "ntdll.dll",
+        "psapi.dll",
+        "ws2_32.dll"
+      ]
+    },
+    "host-dart/bin/dartvm.exe": {
+      "dependencies": [
+        "advapi32.dll",
+        "api-ms-win-core-path-l1-1-0.dll",
+        "bcrypt.dll",
+        "crypt32.dll",
+        "dbghelp.dll",
+        "iphlpapi.dll",
+        "kernel32.dll",
+        "ntdll.dll",
+        "ole32.dll",
+        "oleaut32.dll",
+        "psapi.dll",
+        "rpcrt4.dll",
+        "shell32.dll",
+        "shlwapi.dll",
+        "ws2_32.dll"
+      ]
+    },
+    "host-dart/bin/dartaotruntime.exe": {
+      "dependencies": [
+        "advapi32.dll",
+        "api-ms-win-core-path-l1-1-0.dll",
+        "bcrypt.dll",
+        "crypt32.dll",
+        "dbghelp.dll",
+        "iphlpapi.dll",
+        "kernel32.dll",
+        "ntdll.dll",
+        "ole32.dll",
+        "oleaut32.dll",
+        "psapi.dll",
+        "rpcrt4.dll",
+        "shell32.dll",
+        "shlwapi.dll",
+        "ws2_32.dll"
+      ]
+    },
+    "host-dart/bin/dart.exe": {
+      "dependencies": [
+        "advapi32.dll",
+        "api-ms-win-core-path-l1-1-0.dll",
+        "bcrypt.dll",
+        "crypt32.dll",
+        "dbghelp.dll",
+        "iphlpapi.dll",
+        "kernel32.dll",
+        "ntdll.dll",
+        "ole32.dll",
+        "oleaut32.dll",
+        "psapi.dll",
+        "rpcrt4.dll",
+        "shell32.dll",
+        "shlwapi.dll",
+        "ws2_32.dll"
+      ]
+    },
+    "bin/ctr-kernel.exe": {
+      "dependencies": [
+        "advapi32.dll",
+        "api-ms-win-core-path-l1-1-0.dll",
+        "bcrypt.dll",
+        "crypt32.dll",
+        "dbghelp.dll",
+        "iphlpapi.dll",
+        "kernel32.dll",
+        "ntdll.dll",
+        "ole32.dll",
+        "oleaut32.dll",
+        "psapi.dll",
+        "rpcrt4.dll",
+        "shell32.dll",
+        "shlwapi.dll",
+        "ws2_32.dll"
+      ]
+    },
+    "bin/gen_snapshot.exe": {
+      "dependencies": [
+        "api-ms-win-core-path-l1-1-0.dll",
+        "bcrypt.dll",
+        "dbghelp.dll",
+        "kernel32.dll",
+        "ntdll.dll",
+        "psapi.dll",
+        "ws2_32.dll"
+      ]
+    },
+    "dartbrew.exe": {
+      "dependencies": [
+        "advapi32.dll",
+        "api-ms-win-core-path-l1-1-0.dll",
+        "bcrypt.dll",
+        "crypt32.dll",
+        "dbghelp.dll",
+        "iphlpapi.dll",
+        "kernel32.dll",
+        "ntdll.dll",
+        "ole32.dll",
+        "oleaut32.dll",
+        "psapi.dll",
+        "rpcrt4.dll",
+        "shell32.dll",
+        "shlwapi.dll",
+        "ws2_32.dll"
+      ]
+    }
+  },
+  "native_build_checks": "Extracted SDK passed doctor and the native SDK integration suite."
+}

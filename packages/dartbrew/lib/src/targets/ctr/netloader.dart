@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 
 import '../../device/transport.dart';
+import '../../errors.dart';
 
 /// The port the Homebrew Launcher netloader uses for discovery, for replies
 /// to the host and for uploads.
@@ -21,14 +22,8 @@ const _discoveryInterval = Duration(milliseconds: 150);
 final _ping = ascii.encode('3dsboot');
 final _pong = ascii.encode('boot3ds');
 
-/// A discovery or upload failure, with a message for the user.
-final class NetloaderException implements Exception {
-  final String message;
-  const NetloaderException(this.message);
-
-  @override
-  String toString() => message;
-}
+/// The exit code of a command whose discovery or upload failed.
+const _failureExitCode = 1;
 
 /// Lists the local addresses to send discovery broadcasts from.
 typedef InterfaceAddressLister = Future<List<InternetAddress>> Function();
@@ -88,7 +83,7 @@ final class NetloaderClient implements DeviceTransport {
 
   /// Emits each console that answers within [wait].
   ///
-  /// Emits a [NetloaderException] naming [replyPort] when that port cannot
+  /// Emits a [DartbrewException] naming [replyPort] when that port cannot
   /// be bound, for example because another program holds it.
   @override
   Stream<InternetAddress> discover(Duration wait) {
@@ -130,7 +125,8 @@ final class NetloaderClient implements DeviceTransport {
         if (stopped) return;
         stop();
         controller.addError(
-          NetloaderException(
+          DartbrewException(
+            _failureExitCode,
             'Could not listen on UDP port $replyPort for console replies '
             '(${error.osError?.message ?? error.message}). Close the other '
             'program using it, such as another dartbrew or 3dslink, and try '
@@ -201,7 +197,7 @@ final class NetloaderClient implements DeviceTransport {
   /// console then appends its own `<hex ip>_3DSLINK_` entry, which libctru
   /// removes and turns into `__3dslink_host`.
   ///
-  /// Throws a [NetloaderException] when the console cannot be reached
+  /// Throws a [DartbrewException] when the console cannot be reached
   /// within [connectTimeout], rejects the upload, drops the connection, or
   /// leaves a write or acknowledgement pending for longer than [ackTimeout].
   @override
@@ -220,7 +216,8 @@ final class NetloaderClient implements DeviceTransport {
     try {
       socket = await Socket.connect(console, port, timeout: connectTimeout);
     } on SocketException catch (error) {
-      throw NetloaderException(
+      throw DartbrewException(
+        _failureExitCode,
         'Could not connect to the netloader at $where '
         '(${error.osError?.message ?? error.message}). Check that '
         'Homebrew Launcher shows the netloader as waiting (press Y).',
@@ -229,7 +226,8 @@ final class NetloaderClient implements DeviceTransport {
     socket.done.ignore();
     final reader = _Reader(socket);
     var stage = 'sending the file name';
-    NetloaderException lost([String? cause]) => NetloaderException(
+    DartbrewException lost([String? cause]) => DartbrewException(
+      _failureExitCode,
       'Lost the connection to the console at $where while $stage'
       '${cause == null ? '' : ' ($cause)'}.',
     );
@@ -303,11 +301,12 @@ List<Uint8List> compressedFrames(List<int> data) {
 
 /// The argv block body: each of [argv] NUL-terminated, back to back.
 ///
-/// Throws a [NetloaderException] when it exceeds [maxArgvLength] bytes.
+/// Throws a [DartbrewException] when it exceeds [maxArgvLength] bytes.
 Uint8List encodeArgv(List<String> argv) {
   final bytes = utf8.encode(argv.map((arg) => '$arg\x00').join());
   if (bytes.length > maxArgvLength) {
-    throw NetloaderException(
+    throw DartbrewException(
+      _failureExitCode,
       'The program arguments take ${bytes.length} bytes; the netloader '
       'accepts at most $maxArgvLength.',
     );
@@ -323,7 +322,8 @@ void _checkAck(int code, String where) {
     -3 => 'it does not have enough memory',
     _ => 'unknown reason',
   };
-  throw NetloaderException(
+  throw DartbrewException(
+    _failureExitCode,
     'The console at $where rejected the upload with code $code ($reason).',
   );
 }

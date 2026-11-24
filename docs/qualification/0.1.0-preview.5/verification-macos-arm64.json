@@ -1,0 +1,175 @@
+{
+  "host": "macos-arm64",
+  "sdk_archive": "dartbrew-0.1.0-preview.5-macos-arm64.zip",
+  "sdk_sha256": "97136d9661d5d1040f8df8f37ec452c30e21c0756988570f720ed895b0326f36",
+  "sdk_manifest_sha256": "1354dff3d0a995eef2b2651462abe4380b401f15bfc711ff188e5c3593e67fe3",
+  "files": 2412,
+  "devkitpro": {
+    "devkitARM": "r68-1",
+    "libctru": "2.7.0-1"
+  },
+  "code_generation": {
+    "match": "dwarf-producer-host-only",
+    "sha256": "b7a814dc413a61247173cb7be41dc0712b9dd83bc32cd8266b6516941d5077ef",
+    "comparable_sha256": "0b385a8fd352204d42a08717cb8733e82a03fbb7fccf210517a5b7cf70f911cc"
+  },
+  "dependency_audit": {
+    "host-dart/bin/utils/wasm-opt": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "minimum_macos": "14.0"
+    },
+    "host-dart/bin/snapshots/dartdev_aot.dart.snapshot": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "minimum_macos": "10.15"
+    },
+    "host-dart/bin/snapshots/dart2js_aot.dart.snapshot": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "minimum_macos": "10.15"
+    },
+    "host-dart/bin/snapshots/dart2bytecode.dart.snapshot": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "minimum_macos": "10.15"
+    },
+    "host-dart/bin/snapshots/dart2wasm_product.snapshot": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "minimum_macos": "10.15"
+    },
+    "host-dart/bin/snapshots/dds_aot.dart.snapshot": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "minimum_macos": "10.15"
+    },
+    "host-dart/bin/snapshots/frontend_server_aot.dart.snapshot": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "minimum_macos": "10.15"
+    },
+    "host-dart/bin/snapshots/dart_runtime_service_vm_aot.dart.snapshot": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "minimum_macos": "10.15"
+    },
+    "host-dart/bin/snapshots/kernel_worker_aot.dart.snapshot": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "minimum_macos": "10.15"
+    },
+    "host-dart/bin/snapshots/dart_tooling_daemon_aot.dart.snapshot": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "minimum_macos": "10.15"
+    },
+    "host-dart/bin/snapshots/dartdevc_aot.dart.snapshot": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "minimum_macos": "10.15"
+    },
+    "host-dart/bin/snapshots/gen_kernel_aot.dart.snapshot": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "minimum_macos": "10.15"
+    },
+    "host-dart/bin/snapshots/analysis_server_aot.dart.snapshot": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "minimum_macos": "10.15"
+    },
+    "host-dart/bin/utils/gen_snapshot": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib",
+        "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+        "/usr/lib/libobjc.A.dylib",
+        "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices",
+        "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+        "/System/Library/Frameworks/Security.framework/Versions/A/Security"
+      ],
+      "minimum_macos": "14.0"
+    },
+    "host-dart/bin/dartvm": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib",
+        "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+        "/usr/lib/libobjc.A.dylib",
+        "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+        "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+        "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices"
+      ],
+      "minimum_macos": "14.0"
+    },
+    "host-dart/bin/dartaotruntime": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib",
+        "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+        "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+        "/usr/lib/libobjc.A.dylib",
+        "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+        "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices"
+      ],
+      "minimum_macos": "14.0"
+    },
+    "host-dart/bin/dart": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib",
+        "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+        "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+        "/usr/lib/libobjc.A.dylib",
+        "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+        "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices"
+      ],
+      "minimum_macos": "14.0"
+    },
+    "bin/ctr-kernel": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib",
+        "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+        "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+        "/usr/lib/libobjc.A.dylib",
+        "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+        "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices"
+      ],
+      "minimum_macos": "14.0"
+    },
+    "bin/gen_snapshot": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib",
+        "/usr/lib/libobjc.A.dylib",
+        "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+        "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices",
+        "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+        "/System/Library/Frameworks/Security.framework/Versions/A/Security"
+      ],
+      "minimum_macos": "14.0"
+    },
+    "dartbrew": {
+      "dependencies": [
+        "/usr/lib/libSystem.B.dylib",
+        "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+        "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+        "/usr/lib/libobjc.A.dylib",
+        "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+        "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices"
+      ],
+      "minimum_macos": "14.0"
+    }
+  },
+  "minimum_macos": "14.0",
+  "native_build_checks": "Extracted SDK passed doctor and the native SDK integration suite."
+}

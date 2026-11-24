@@ -1,0 +1,217 @@
+Compare floating-point values consistently with IEEE unordered semantics.
+
+diff --git a/runtime/lib/double.cc b/runtime/lib/double.cc
+index 35c56a0a..b0ebf809 100644
+--- a/runtime/lib/double.cc
++++ b/runtime/lib/double.cc
+@@ -86,7 +86,11 @@ DEFINE_NATIVE_ENTRY(Double_div, 0, 2) {
+ DEFINE_NATIVE_ENTRY(Double_greaterThan, 0, 2) {
+   const Double& left = Double::CheckedHandle(zone, arguments->NativeArgAt(0));
+   GET_NON_NULL_NATIVE_ARGUMENT(Double, right, arguments->NativeArgAt(1));
++#if defined(DART_HOST_OS_CTR)
++  bool result = !right.IsNull() && CtrDoubleCompare(left.value(), right.value()) == 1;
++#else
+   bool result = right.IsNull() ? false : (left.value() > right.value());
++#endif
+   if (FLAG_trace_intrinsified_natives) {
+     OS::PrintErr("Double_greaterThan %s > %s\n", left.ToCString(),
+                  right.ToCString());
+@@ -97,13 +101,21 @@ DEFINE_NATIVE_ENTRY(Double_greaterThan, 0, 2) {
+ DEFINE_NATIVE_ENTRY(Double_greaterThanFromInteger, 0, 2) {
+   const Double& right = Double::CheckedHandle(zone, arguments->NativeArgAt(0));
+   GET_NON_NULL_NATIVE_ARGUMENT(Integer, left, arguments->NativeArgAt(1));
++#if defined(DART_HOST_OS_CTR)
++  return Bool::Get(CtrDoubleCompare(left.ToDouble(), right.value()) == 1).ptr();
++#else
+   return Bool::Get(left.ToDouble() > right.value()).ptr();
++#endif
+ }
+ 
+ DEFINE_NATIVE_ENTRY(Double_equal, 0, 2) {
+   const Double& left = Double::CheckedHandle(zone, arguments->NativeArgAt(0));
+   GET_NON_NULL_NATIVE_ARGUMENT(Double, right, arguments->NativeArgAt(1));
++#if defined(DART_HOST_OS_CTR)
++  bool result = !right.IsNull() && CtrDoubleCompare(left.value(), right.value()) == 0;
++#else
+   bool result = right.IsNull() ? false : (left.value() == right.value());
++#endif
+   if (FLAG_trace_intrinsified_natives) {
+     OS::PrintErr("Double_equal %s == %s\n", left.ToCString(),
+                  right.ToCString());
+@@ -114,7 +126,11 @@ DEFINE_NATIVE_ENTRY(Double_equal, 0, 2) {
+ DEFINE_NATIVE_ENTRY(Double_equalToInteger, 0, 2) {
+   const Double& left = Double::CheckedHandle(zone, arguments->NativeArgAt(0));
+   GET_NON_NULL_NATIVE_ARGUMENT(Integer, right, arguments->NativeArgAt(1));
++#if defined(DART_HOST_OS_CTR)
++  return Bool::Get(CtrDoubleCompare(left.value(), right.ToDouble()) == 0).ptr();
++#else
+   return Bool::Get(left.value() == right.ToDouble()).ptr();
++#endif
+ }
+ 
+ #if defined(DART_HOST_OS_MACOS)
+diff --git a/runtime/vm/compiler/asm_intrinsifier_arm.cc b/runtime/vm/compiler/asm_intrinsifier_arm.cc
+index 2b798f70..414ce98e 100644
+--- a/runtime/vm/compiler/asm_intrinsifier_arm.cc
++++ b/runtime/vm/compiler/asm_intrinsifier_arm.cc
+@@ -732,6 +732,7 @@ static void TestLastArgumentIsDouble(Assembler* assembler,
+ static void CompareDoubles(Assembler* assembler,
+                            Label* normal_ir_body,
+                            Condition true_condition) {
++  if (TargetCPUFeatures::armv6k()) return;
+   Label is_smi, double_op;
+ 
+   TestLastArgumentIsDouble(assembler, &is_smi, normal_ir_body);
+diff --git a/runtime/vm/compiler/backend/il_arm.cc b/runtime/vm/compiler/backend/il_arm.cc
+index 5cabe85a..c65e2841 100644
+--- a/runtime/vm/compiler/backend/il_arm.cc
++++ b/runtime/vm/compiler/backend/il_arm.cc
+@@ -1118,9 +1118,12 @@ LocationSummary* EqualityCompareInstr::MakeLocationSummary(Zone* zone,
+     locs->set_out(0, Location::RequiresRegister());
+     return locs;
+   } else if (input_representation() == kUnboxedDouble) {
+-    const intptr_t kNumTemps = 0;
++    const intptr_t kNumTemps = TargetCPUFeatures::armv6k() ? 4 : 0;
+     LocationSummary* locs = new (zone)
+         LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kNoCall);
++    for (intptr_t i = 0; i < kNumTemps; ++i) {
++      locs->set_temp(i, Location::RequiresRegister());
++    }
+     locs->set_in(0, Location::RequiresFpuRegister());
+     locs->set_in(1, Location::RequiresFpuRegister());
+     locs->set_out(0, Location::RequiresRegister());
+@@ -1374,10 +1377,76 @@ static Condition TokenKindToDoubleCondition(Token::Kind kind) {
+   }
+ }
+ 
++static Condition EmitCtrDoubleComparison(FlowGraphCompiler* compiler,
++                                         const LocationSummary& locs,
++                                         Token::Kind kind,
++                                         BranchLabels labels) {
++  const Register left_lo = locs.temp(0).reg();
++  const Register left_hi = locs.temp(1).reg();
++  const Register right_lo = locs.temp(2).reg();
++  const Register right_hi = locs.temp(3).reg();
++  __ vmovrrd(left_lo, left_hi, EvenDRegisterOf(locs.in(0).fpu_reg()));
++  __ vmovrrd(right_lo, right_hi, EvenDRegisterOf(locs.in(1).fpu_reg()));
++
++  auto* less = (kind == Token::kLT || kind == Token::kLTE || kind == Token::kNE)
++                   ? labels.true_label : labels.false_label;
++  auto* equal = (kind == Token::kEQ || kind == Token::kLTE || kind == Token::kGTE)
++                    ? labels.true_label : labels.false_label;
++  auto* greater = (kind == Token::kGT || kind == Token::kGTE || kind == Token::kNE)
++                      ? labels.true_label : labels.false_label;
++  auto* unordered = kind == Token::kNE ? labels.true_label : labels.false_label;
++  compiler::Label left_ordered, both_ordered, same_sign, unsigned_lower;
++
++  // Shift out the sign; values beyond infinity, including low payloads, are NaN.
++  __ LoadImmediate(TMP, 0xffe00000);
++  __ cmp(TMP, compiler::Operand(left_hi, LSL, 1));
++  __ b(&left_ordered, HI);
++  __ b(unordered, CC);
++  __ cmp(left_lo, compiler::Operand(0));
++  __ b(unordered, NE);
++  __ Bind(&left_ordered);
++  __ cmp(TMP, compiler::Operand(right_hi, LSL, 1));
++  __ b(&both_ordered, HI);
++  __ b(unordered, CC);
++  __ cmp(right_lo, compiler::Operand(0));
++  __ b(unordered, NE);
++  __ Bind(&both_ordered);
++
++  // IEEE equality identifies the two encodings of zero.
++  __ orr(TMP, left_lo, compiler::Operand(right_lo));
++  __ orr(TMP, TMP, compiler::Operand(left_hi, LSL, 1));
++  __ orr(TMP, TMP, compiler::Operand(right_hi, LSL, 1));
++  __ cmp(TMP, compiler::Operand(0));
++  __ b(equal, EQ);
++
++  __ eor(TMP, left_hi, compiler::Operand(right_hi));
++  __ TestImmediate(TMP, 0x80000000);
++  __ b(&same_sign, EQ);
++  __ TestImmediate(left_hi, 0x80000000);
++  __ b(less, NE);
++  __ b(greater);
++  __ Bind(&same_sign);
++  __ cmp(left_hi, compiler::Operand(right_hi));
++  __ cmp(left_lo, compiler::Operand(right_lo), EQ);
++  __ b(equal, EQ);
++  __ b(&unsigned_lower, CC);
++  __ TestImmediate(left_hi, 0x80000000);
++  __ b(less, NE);
++  __ b(greater);
++  __ Bind(&unsigned_lower);
++  __ TestImmediate(left_hi, 0x80000000);
++  __ b(greater, NE);
++  __ b(less);
++  return EQ;  // Every path above branches to a supplied result label.
++}
++
+ static Condition EmitDoubleComparisonOp(FlowGraphCompiler* compiler,
+                                         const LocationSummary& locs,
+                                         Token::Kind kind,
+                                         BranchLabels labels) {
++  if (TargetCPUFeatures::armv6k()) {
++    return EmitCtrDoubleComparison(compiler, locs, kind, labels);
++  }
+   const QRegister left = locs.in(0).fpu_reg();
+   const QRegister right = locs.in(1).fpu_reg();
+   const DRegister dleft = EvenDRegisterOf(left);
+@@ -1520,9 +1589,14 @@ Condition TestCidsInstr::EmitConditionCode(FlowGraphCompiler* compiler,
+ LocationSummary* RelationalOpInstr::MakeLocationSummary(Zone* zone,
+                                                         bool opt) const {
+   const intptr_t kNumInputs = 2;
+-  const intptr_t kNumTemps = 0;
++  const intptr_t kNumTemps =
++      input_representation() == kUnboxedDouble && TargetCPUFeatures::armv6k()
++          ? 4 : 0;
+   LocationSummary* locs = new (zone)
+       LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kNoCall);
++  for (intptr_t i = 0; i < kNumTemps; ++i) {
++    locs->set_temp(i, Location::RequiresRegister());
++  }
+   if (input_representation() == kUnboxedInt64) {
+     compiler::Operand o;
+     locs->set_in(0, Location::Pair(Location::RequiresRegister(),
+diff --git a/runtime/vm/ctr_double_helpers.cc b/runtime/vm/ctr_double_helpers.cc
+index e6eefebe..811900b0 100755
+--- a/runtime/vm/ctr_double_helpers.cc
++++ b/runtime/vm/ctr_double_helpers.cc
+@@ -1,6 +1,7 @@
+ // Copyright (c) 2026, the Dart project authors. All rights reserved.
+ // Use of this source code is governed by a BSD-style license in LICENSE.
+ #include "vm/ctr_double_helpers.h"
++#include <stdint.h>
+ 
+ #if defined(__3DS__)
+ // GCC's ARM runtime helpers use the base AAPCS even in a hard-float binary.
+@@ -32,3 +33,17 @@ extern "C" double CtrDoubleSub(double left, double right) { return left - right;
+ extern "C" double CtrDoubleMul(double left, double right) { return left * right; }
+ extern "C" double CtrDoubleDiv(double left, double right) { return left / right; }
+ #endif
++
++extern "C" int CtrDoubleCompare(double left, double right) {
++  uint64_t lhs, rhs;
++  __builtin_memcpy(&lhs, &left, sizeof(lhs));
++  __builtin_memcpy(&rhs, &right, sizeof(rhs));
++  const uint64_t sign = UINT64_C(0x8000000000000000);
++  const uint64_t magnitude = ~sign;
++  const uint64_t infinity = UINT64_C(0x7ff0000000000000);
++  if ((lhs & magnitude) > infinity || (rhs & magnitude) > infinity) return 2;
++  if (lhs == rhs || ((lhs | rhs) & magnitude) == 0) return 0;
++  if ((lhs ^ rhs) & sign) return (lhs & sign) ? -1 : 1;
++  const bool less = (lhs & sign) ? lhs > rhs : lhs < rhs;
++  return less ? -1 : 1;
++}
+diff --git a/runtime/vm/ctr_double_helpers.h b/runtime/vm/ctr_double_helpers.h
+index 174bc97a..25a0b2b7 100755
+--- a/runtime/vm/ctr_double_helpers.h
++++ b/runtime/vm/ctr_double_helpers.h
+@@ -10,4 +10,7 @@ extern "C" double CtrDoubleSub(double left, double right);
+ extern "C" double CtrDoubleMul(double left, double right);
+ extern "C" double CtrDoubleDiv(double left, double right);
+ 
++// Returns -1, 0 or 1 for ordered operands; 2 means unordered (a NaN).
++extern "C" int CtrDoubleCompare(double left, double right);
++
+ #endif  // RUNTIME_VM_CTR_DOUBLE_HELPERS_H_

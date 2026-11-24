@@ -61,8 +61,12 @@ final class FakeLauncher {
   void cleanup(String status) =>
       record({'event': 'assert', 'name': 'cleanup', 'status': status});
 
-  void terminal(String outcome) =>
-      record({'event': 'terminal', 'outcome': outcome, 'assertions': 1});
+  void terminal(String outcome, {int? exitCode}) => record({
+    'event': 'terminal',
+    'outcome': outcome,
+    'assertions': 1,
+    'exit_code': ?exitCode,
+  });
 
   /// A bare keepalive line.
   void keepalive() => socket.write('\n');

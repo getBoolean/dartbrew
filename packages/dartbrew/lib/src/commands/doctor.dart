@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 
+import '../devkitpro.dart';
 import '../sdk.dart';
 
 class DoctorCommand extends Command<int> {
@@ -22,9 +23,15 @@ class DoctorCommand extends Command<int> {
       throw UsageException('doctor takes no arguments.', usage);
     }
     final sdk = await NativeSdk.load(sdkDirectory(args));
+    sdk.verifyAllAssets();
+    final install = await DevkitPro.discover();
+    stdout.writeln('devkitPro at ${install.root}');
+    stdout.writeln(
+      'Installed: ${install.versions}. Qualified: ${sdk.manifest.runtime.devkitPro}.',
+    );
     stdout.writeln(
       'Verified native SDK for ${currentHost()}; '
-      '${(sdk.manifest['files'] as Map<String, dynamic>).length} assets.',
+      '${sdk.manifest.files.length} assets.',
     );
     return 0;
   }

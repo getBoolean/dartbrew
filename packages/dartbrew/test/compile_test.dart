@@ -43,7 +43,13 @@ Future<String> _compile(FakeSdk sdk, List<String> args) async {
   final text = utf8.decodeStream(controller.stream);
   final out = IOSink(controller);
   final runner = CommandRunner<int>('dartbrew', '')
-    ..addCommand(CompileCommand(start: startBuildStub, out: out));
+    ..addCommand(
+      CompileCommand(
+        environment: sdk.environment,
+        start: startBuildStub,
+        out: out,
+      ),
+    );
   try {
     expect(await runner.run(['compile', '--sdk', sdk.root.path, ...args]), 0);
   } finally {
@@ -61,8 +67,8 @@ List<String> _stages(String output) => [
     (command as Map)['stage'] as String,
 ];
 
-Map<String, dynamic> _json(String path) =>
-    jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>;
+Map<String, Object?> _json(String path) =>
+    jsonDecode(File(path).readAsStringSync()) as Map<String, Object?>;
 
 void main() {
   test('metadata assembly has exactly the native Program fields', () {
@@ -218,6 +224,123 @@ void main() {
     expect(_json(p.join(project.output, 'artifact.json'))['mode'], 'jit');
   });
 
+  for (final mode in ['aot', 'jit']) {
+    test(
+      '$mode links the dart:io archive ahead of the runtime archive',
+      () async {
+        final sdk = ctrBuildSdk();
+        final project = _project();
+        await _compile(sdk, [
+          '--mode',
+          mode,
+          '-o',
+          project.output,
+          project.entry,
+        ]);
+        final link = [
+          for (final argument in sdk.calls('ld').single)
+            argument.replaceAll(r'\', '/'),
+        ];
+        int position(String suffix) =>
+            link.indexWhere((a) => a.endsWith(suffix));
+        final io = position('/io.a');
+        // The launcher objects call into the I/O layer, which calls the VM.
+        expect(io, greaterThan(position('/work/payload.o')));
+        expect(io, lessThan(position('/runtime.a')));
+      },
+    );
+  }
+
+  test(
+    'link failure names the installed and qualified package versions',
+    () async {
+      final sdk = ctrBuildSdk();
+      final linker = File(p.join(sdk.root.path, 'tools', 'ld.dart'));
+      linker.writeAsStringSync(
+        linker.readAsStringSync().replaceFirst(
+          'exitCode = 0;',
+          'exitCode = 42;',
+        ),
+      );
+      final project = _project();
+      await expectLater(
+        _compile(sdk, ['-o', project.output, project.entry]),
+        throwsA(
+          isA<ProcessException>().having(
+            (e) => e.message,
+            'message',
+            allOf(
+              contains('Installed: devkitARM r68-1, libctru 2.7.1-1'),
+              contains('Qualified: devkitARM r68-1, libctru 2.7.0-1'),
+              contains('Update dartbrew or devkitPro'),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
+  group('SDK verification', () {
+    test('ignores a modified asset the build does not read', () async {
+      final sdk = ctrBuildSdk();
+      File(p.join(sdk.root.path, 'bin', 'tool')).writeAsStringSync('changed');
+      final project = _project();
+      await _compile(sdk, ['-o', project.output, project.entry]);
+      expect(
+        File(p.join(project.output, 'application.3dsx')).existsSync(),
+        isTrue,
+      );
+    });
+
+    test('names a modified asset the build reads', () async {
+      final sdk = ctrBuildSdk();
+      File(
+        p.join(sdk.root.path, 'native-src', 'io.cc'),
+      ).writeAsStringSync('changed');
+      final project = _project();
+      await expectLater(
+        _compile(sdk, ['-o', project.output, project.entry]),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('SDK asset hash mismatch: native-src/io.cc'),
+          ),
+        ),
+      );
+    });
+
+    test(
+      'an SDK manifest without the compile plan exits 65 naming the key',
+      () async {
+        final sdk = ctrBuildSdk();
+        sdk.editManifest((json) {
+          (json['runtime']! as Map).remove('compile_plan');
+        });
+        final project = _project();
+        final result = await Process.run(Platform.resolvedExecutable, [
+          File('bin/dartbrew.dart').absolute.path,
+          'compile',
+          '--sdk',
+          sdk.root.path,
+          '-o',
+          project.output,
+          project.entry,
+        ]);
+        expect(result.exitCode, 65);
+        expect(result.stderr, contains('runtime.compile_plan'));
+        expect(
+          (result.stderr as String).toLowerCase(),
+          contains('update dartbrew'),
+        );
+        expect(Directory(project.output).existsSync(), isFalse);
+      },
+      // Starting the CLI from source in a fresh VM can exceed the default
+      // 30 s under a fully loaded parallel run.
+      timeout: const Timeout(Duration(minutes: 3)),
+    );
+  });
+
   test('compiles AOT when no mode is given', () async {
     final sdk = ctrBuildSdk();
     final project = _project();
@@ -260,7 +383,9 @@ void main() {
       pubspec: 'name: snake\ndartbrew:\n  icon: icon.png\n',
     );
     final runner = CommandRunner<int>('dartbrew', '')
-      ..addCommand(CompileCommand(start: startBuildStub));
+      ..addCommand(
+        CompileCommand(environment: sdk.environment, start: startBuildStub),
+      );
     await expectLater(
       runner.run([
         'compile',
@@ -316,7 +441,9 @@ void main() {
     ]);
     expect(_json(p.join(project.output, 'run.json'))['fixture'], 'hello');
     final runner = CommandRunner<int>('dartbrew', '')
-      ..addCommand(CompileCommand(start: startBuildStub));
+      ..addCommand(
+        CompileCommand(environment: sdk.environment, start: startBuildStub),
+      );
     expect(runner.commands['compile']!.usage, isNot(contains('--fixture')));
   });
 
@@ -327,7 +454,9 @@ void main() {
       ..createSync(recursive: true)
       ..writeAsStringSync('keep');
     final runner = CommandRunner<int>('dartbrew', '')
-      ..addCommand(CompileCommand(start: startBuildStub));
+      ..addCommand(
+        CompileCommand(environment: sdk.environment, start: startBuildStub),
+      );
     await expectLater(
       runner.run([
         'compile',
@@ -357,7 +486,9 @@ void main() {
     final project = _project();
     final other = Directory(p.join(project.owner.path, 'other'))..createSync();
     final runner = CommandRunner<int>('dartbrew', '')
-      ..addCommand(CompileCommand(start: startBuildStub));
+      ..addCommand(
+        CompileCommand(environment: sdk.environment, start: startBuildStub),
+      );
     await expectLater(
       runner.run([
         'compile',
@@ -391,6 +522,16 @@ void main() {
     test('uses the pubspec name', () {
       final project = _project(pubspec: "name: 'quoted_name' # comment\n");
       expect(fixtureFor(project.root, project.entry), 'quoted_name');
+    });
+
+    test('reads the name of a flow-style pubspec', () {
+      final project = _project(pubspec: '{version: 1.0.0, name: flow_name}\n');
+      expect(fixtureFor(project.root, project.entry), 'flow_name');
+    });
+
+    test('falls back to the entry name for a pubspec that is not YAML', () {
+      final project = _project(pubspec: 'name: [broken\n');
+      expect(fixtureFor(project.root, project.entry), 'main');
     });
 
     test('falls back to the entry name, reduced to the token rule', () {

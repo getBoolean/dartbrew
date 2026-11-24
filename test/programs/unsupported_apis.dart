@@ -24,7 +24,6 @@ Future<void> _area(String name, FutureOr<void> Function() call) async {
 }
 
 Future<void> main(List<String> args) async {
-  await _area('file', () => File('/probe_missing.txt').readAsStringSync());
   await _area('socket', () async {
     final socket = await Socket.connect(
       '127.0.0.1',
@@ -39,7 +38,4 @@ Future<void> main(List<String> args) async {
     isolate.kill();
   });
   await _area('ffi', () => DynamicLibrary.open('libprobe_missing.so'));
-  await _area('stdout', () => stdout.write('stdout-probe\n'));
-  print('try:exit');
-  exit(3);
 }

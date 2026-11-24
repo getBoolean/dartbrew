@@ -1,0 +1,173 @@
+{
+  "version": "0.1.0-preview.5",
+  "status": "qualified",
+  "sdk_head": "35dac222e9d5c7c33e4b6e80ee2b54123a3cba8b",
+  "sdk_tree": "1be5b2e114d0857c7b5d607b62b77c7e5e9b9f75",
+  "snapshot_hash": "c5e274828bf37a90359bd3b0753e3eb2",
+  "hosts": [
+    {
+      "host": "windows-x64",
+      "sdk_archive": "dartbrew-0.1.0-preview.5-windows-x64.zip",
+      "result": "pass",
+      "sdk_sha256": "833d8d5c1fe8a28996aa78272ad28a7cecd5398f22e7e4c203959e3bab7a1c49",
+      "sdk_manifest_sha256": "738df04cb3039fcb2407f14f09def23472122f2e3dc353c087a2faef9d84b6a2",
+      "files": 2412,
+      "verification": "verification-windows-x64.json",
+      "verification_sha256": "1fbf25b4580644076f6453af7296e1a64e154d1a3a1bfc109626b1c1377d29d6",
+      "integration_tests_passed": 7
+    },
+    {
+      "host": "linux-x64",
+      "sdk_archive": "dartbrew-0.1.0-preview.5-linux-x64.zip",
+      "result": "pass",
+      "sdk_sha256": "07bc037e6acbecea537ac75bf494fb5c2f59736ae5a2ac8ca15ee4d41221d41d",
+      "sdk_manifest_sha256": "e8d335154c7a934a862a038d4f62cbc4879cb1b43e49250be50d6e3679d227a7",
+      "files": 2413,
+      "verification": "verification-linux-x64.json",
+      "verification_sha256": "07dc583cc7b4f9f6972c4508ac00a825584212f89aff4b198340644c2d66c264",
+      "integration_tests_passed": 7,
+      "cold_hello_seconds": 179.43,
+      "warm_hello_seconds": 10.778,
+      "hello_sha256": "3ad34a2216282064258e018f2a0af76bac76098a48c4f1ee5a4a7ed6a3076f20",
+      "azahar_hello_run_ids": [
+        "32db39aaece44b13c3c46c85e9099e85",
+        "1988c26f542a30c166a1fb4326307b27"
+      ]
+    },
+    {
+      "host": "macos-arm64",
+      "sdk_archive": "dartbrew-0.1.0-preview.5-macos-arm64.zip",
+      "result": "pass",
+      "sdk_sha256": "97136d9661d5d1040f8df8f37ec452c30e21c0756988570f720ed895b0326f36",
+      "sdk_manifest_sha256": "1354dff3d0a995eef2b2651462abe4380b401f15bfc711ff188e5c3593e67fe3",
+      "files": 2412,
+      "verification": "verification-macos-arm64.json",
+      "verification_sha256": "8471ca7ec327062ec205e60dc614a530b2044a6b699a74641f37e7a794792507",
+      "integration_tests_passed": 7,
+      "toolchain": "Source-built devkitARM r68 and signed libctru 2.7.1-1. Doctor reported unknown for both installed package versions.",
+      "minimum_macos": "14.0",
+      "tested_macos": "27.0 (26A428)",
+      "gatekeeper": {
+        "method": "Quarantine-marked byte-identical ZIP extracted with macOS Archive Utility, verified propagated com.apple.quarantine, assessed with spctl, opened extracted CLI via Launch Services.",
+        "result": "Rejected by system policy (spctl exit 3). No approval or override performed. No successful interactive launch observed."
+      },
+      "cold_hello_seconds": 228.0,
+      "warm_hello_seconds": 20.6,
+      "hello_sha256": "95de32d8387f763fa02b6b5d08a4cf3268b7fc8b3dd2216bd7884cba0adddc1d"
+    }
+  ],
+  "features": [
+    {
+      "name": "async",
+      "covers": "Timers, futures and asynchronous event delivery",
+      "results": {
+        "console_aot": "pass",
+        "console_jit": "pass",
+        "azahar_aot": "pass"
+      }
+    },
+    {
+      "name": "exceptions",
+      "covers": "Dart exceptions and stack traces",
+      "results": {
+        "console_aot": "pass",
+        "console_jit": "pass",
+        "azahar_aot": "pass"
+      }
+    },
+    {
+      "name": "exit_code",
+      "covers": "Explicit process exit code and output flush",
+      "results": {
+        "console_aot": "pass",
+        "console_jit": "pass",
+        "azahar_aot": "pass"
+      }
+    },
+    {
+      "name": "files",
+      "covers": "Synchronous and asynchronous SD filesystem operations",
+      "results": {
+        "console_aot": "pass",
+        "console_jit": "pass",
+        "azahar_aot": "pass"
+      }
+    },
+    {
+      "name": "gc_stress",
+      "covers": "Allocation and garbage collection under load",
+      "results": {
+        "console_aot": "pass",
+        "console_jit": "pass",
+        "azahar_aot": "pass"
+      }
+    },
+    {
+      "name": "hello",
+      "covers": "Application launch, stdout and orderly shutdown",
+      "results": {
+        "console_aot": "pass",
+        "console_jit": "pass",
+        "azahar_aot": "pass"
+      }
+    },
+    {
+      "name": "numeric",
+      "covers": "ARMv6K numeric operations and software math",
+      "results": {
+        "console_aot": "pass",
+        "console_jit": "pass",
+        "azahar_aot": "pass"
+      }
+    },
+    {
+      "name": "platform",
+      "covers": "Platform properties, standard streams and exit status",
+      "results": {
+        "console_aot": "pass",
+        "console_jit": "pass",
+        "azahar_aot": "pass"
+      }
+    },
+    {
+      "name": "subnormal",
+      "covers": "Subnormal floating-point behavior",
+      "results": {
+        "console_aot": "pass",
+        "console_jit": "pass",
+        "azahar_aot": "pass"
+      }
+    }
+  ],
+  "devkitpro": {
+    "devkitARM": "r68-1",
+    "libctru": "2.7.0-1"
+  },
+  "runtime_component": {
+    "producer_host": "linux-x64",
+    "sha256": {
+      "runtime.json": "f0d8174aae33297b220c7c2b49c550c80af0f98979e47e6762e13ceffd01f106",
+      "probe.json": "9bb9196c1fa2bacfc9632b5d2e094d37e6b14c9500e8ba22a07515d24a80e523",
+      "platform.dill": "3556982684b942a78d857606c7975192cc986d308d30bfbfa5452a4bd4d55350",
+      "compile-plan.json": "1026cfe9b0ae4bb837c31d90894d19ef3f468c2207ab8a1f3e46c6665efbf9e1"
+    },
+    "proof": "runtime-probe.json"
+  },
+  "source_commit": "02e63820f0963f8883a37916f6ef33735079ad85",
+  "azahar": {
+    "environment": "Ubuntu 26.04.1 LTS x64",
+    "version": "Azahar 2126.2",
+    "sdk_archive_sha256": "833d8d5c1fe8a28996aa78272ad28a7cecd5398f22e7e4c203959e3bab7a1c49",
+    "receipt": "azahar-aot.json",
+    "receipt_sha256": "0a5450be49a6e5b45ce27bf26efb7872ec321d7f5a0ebdcb9a72f68fc9247396"
+  },
+  "console": {
+    "environment": "Physical New 3DS-family console, Homebrew Launcher",
+    "sdk_host": "windows-x64",
+    "sdk_archive_sha256": "833d8d5c1fe8a28996aa78272ad28a7cecd5398f22e7e4c203959e3bab7a1c49",
+    "sdk_manifest_sha256": "738df04cb3039fcb2407f14f09def23472122f2e3dc353c087a2faef9d84b6a2",
+    "receipt": "console-results.json",
+    "receipt_sha256": "87a96bf19afdc5ef52ff063e6b488efa1eeee6f782314d9bb26ace90c40d9c2b",
+    "journal_extract_sha256": "f7d4ff13d49bbe738d8833fcd17f13397609d8d752b4a230916738ffbdd26de1"
+  }
+}

@@ -1,0 +1,781 @@
+Wire the CTR runtime into the native build and embedding APIs.
+
+diff --git a/build/toolchain/ctr/BUILD.gn b/build/toolchain/ctr/BUILD.gn
+index 9d1223fc..1b571a0b 100644
+--- a/build/toolchain/ctr/BUILD.gn
++++ b/build/toolchain/ctr/BUILD.gn
+@@ -8,10 +8,16 @@ config("target_config") {
+   cflags = ctr_cflags
+   asmflags = ctr_cflags
+   include_dirs = [ "$ctr_libctru/include" ]
+-  defines = [ "__3DS__" ]
++  defines = [
++    "__3DS__",
++    "_POSIX_C_SOURCE=200809L",
++  ]
+   ldflags = ctr_cflags + [ "-specs=$ctr_specs_file" ]
+   lib_dirs = [ "$ctr_libctru/lib" ]
+-  libs = [ "ctru", "m" ]
++  libs = [
++    "ctru",
++    "m",
++  ]
+ }
+ 
+ gcc_toolchain("arm") {
+@@ -26,9 +32,3 @@ gcc_toolchain("arm") {
+   toolchain_os = "ctr"
+   is_clang = false
+ }
+-
+-# This source-set proves configuration without requiring an unported VM.
+-source_set("abi_probe") {
+-  sources = [ "probe.cc" ]
+-}
+-
+diff --git a/pkg/vm/lib/modular/transformations/ffi/abi.dart b/pkg/vm/lib/modular/transformations/ffi/abi.dart
+index e3ea70b4..fee06b91 100644
+--- a/pkg/vm/lib/modular/transformations/ffi/abi.dart
++++ b/pkg/vm/lib/modular/transformations/ffi/abi.dart
+@@ -25,7 +25,7 @@ extension on _Architecture {
+ }
+ 
+ /// The operating systems the Dart VM runs on.
+-enum _OS { android, fuchsia, ios, linux, macos, windows }
++enum _OS { android, fuchsia, ios, linux, macos, windows, ctr }
+ 
+ /// An application binary interface (ABI).
+ ///
+@@ -113,7 +113,10 @@ class Abi {
+   /// The application binary interface for Windows on the X64 architecture.
+   static const windowsX64 = _windowsX64;
+ 
+-  /// The ABIs that the DartVM can run on, sorted alphabetically.
++  /// The internal native layout for CTR on Arm. Public FFI is unqualified.
++  static const ctrArm = _ctrArm;
++
++  /// The ABIs in runtime enum order. New entries retain existing indices.
+   ///
+   /// Does not contain macosIA32, we stopped supporting it.
+   /// https://github.com/dart-lang/sdk/issues/39810
+@@ -146,6 +149,7 @@ class Abi {
+     windowsArm64,
+     windowsIA32,
+     windowsX64,
++    ctrArm,
+   ];
+ 
+   /// A string representation of this ABI.
+@@ -192,6 +196,7 @@ class Abi {
+   static const _windowsArm64 = Abi._(_Architecture.arm64, _OS.windows);
+   static const _windowsIA32 = Abi._(_Architecture.ia32, _OS.windows);
+   static const _windowsX64 = Abi._(_Architecture.x64, _OS.windows);
++  static const _ctrArm = Abi._(_Architecture.arm, _OS.ctr);
+ }
+ 
+ // Keep consistent with sdk/lib/ffi/abi.dart.
+@@ -220,6 +225,7 @@ const Map<Abi, String> abiNames = {
+   Abi.windowsArm64: 'windowsArm64',
+   Abi.windowsIA32: 'windowsIA32',
+   Abi.windowsX64: 'windowsX64',
++  Abi.ctrArm: 'ctrArm',
+ };
+ 
+ /// The size of integer registers and memory addresses in bytes per [Abi].
+@@ -270,6 +276,7 @@ const Map<Abi, Map<NativeType, int>> nonSizeAlignment = {
+   Abi.linuxArm: _wordSize32Align64,
+   Abi.linuxRiscv32: _wordSize32Align64,
+   Abi.windowsIA32: _wordSize32Align64,
++  Abi.ctrArm: _wordSize32Align64,
+ };
+ 
+ // All 64 bit ABIs align struct fields to their size.
+diff --git a/runtime/BUILD.gn b/runtime/BUILD.gn
+index 55b4e8ca..f54e42ee 100644
+--- a/runtime/BUILD.gn
++++ b/runtime/BUILD.gn
+@@ -374,6 +374,10 @@ source_set("dart_api") {
+ 
+ library_for_all_configs("libdart") {
+   target_type = dart_component_kind
++  if (is_ctr) {
++    # The native archive carries the VM and its source-set dependencies.
++    complete_static_lib = true
++  }
+   extra_nonproduct_deps = []
+   extra_deps = [
+     ":generate_version_cc_file",
+diff --git a/runtime/platform/atomic.h b/runtime/platform/atomic.h
+index 8b6180c2..be2ac05c 100644
+--- a/runtime/platform/atomic.h
++++ b/runtime/platform/atomic.h
+@@ -160,6 +160,11 @@ inline void StoreStoreFence() {
+   __dmb(_ARM64_BARRIER_ISHST);
+ #elif defined(HOST_ARCH_ARM64) && defined(__GNUC__)
+   __asm__ __volatile__("dmb ishst" : : : "memory");
++#elif defined(HOST_ARCH_ARM) && defined(__GNUC__) && defined(DART_HOST_OS_CTR)
++  // ARM11 has the CP15 data memory barrier, not the ARMv7 DMB encoding.
++  // This full barrier also orders stores; the clobber orders the compiler.
++  const unsigned zero = 0;
++  __asm__ __volatile__("mcr p15, 0, %0, c7, c10, 5" : : "r"(zero) : "memory");
+ #elif defined(HOST_ARCH_ARM) && defined(__GNUC__)
+   __asm__ __volatile__("dmb ishst" : : : "memory");
+ #elif defined(HOST_ARCH_RISCV32) && defined(__GNUC__)
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index aabf63d7..40b79a07 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -8142,7 +8142,8 @@ bool Serializer::CreateArtificialNodeIfNeeded(ObjectPtr obj) {
+       break;
+     }
+     default:
+-      FATAL("Request to create artificial node for object with cid %d", cid);
++      FATAL("Request to create artificial node for object with cid %" Pd32,
++            cid);
+   }
+ 
+   id = AssignArtificialRef(obj);
+diff --git a/runtime/vm/code_descriptors.cc b/runtime/vm/code_descriptors.cc
+index abc229fa..423618c5 100644
+--- a/runtime/vm/code_descriptors.cc
++++ b/runtime/vm/code_descriptors.cc
+@@ -709,8 +709,9 @@ void CodeSourceMapReader::DumpInlineIntervals(uword start) {
+         break;
+       }
+       case CodeSourceMapOps::kAdvancePC: {
+-        THR_Print("%" Px "-%" Px ": ", start + current_pc_offset,
+-                  start + current_pc_offset + arg - 1);
++        THR_Print("%" Px "-%" Px ": ",
++                  static_cast<uword>(start + current_pc_offset),
++                  static_cast<uword>(start + current_pc_offset + arg - 1));
+         for (intptr_t i = 0; i < function_stack.length(); i++) {
+           THR_Print("%s", function_stack[i]->ToCString());
+           if (token_positions[i].IsReal()) {
+@@ -771,8 +772,9 @@ void CodeSourceMapReader::DumpSourcePositions(uword start) {
+         break;
+       }
+       case CodeSourceMapOps::kAdvancePC: {
+-        THR_Print("%" Px "-%" Px ": ", start + current_pc_offset,
+-                  start + current_pc_offset + arg - 1);
++        THR_Print("%" Px "-%" Px ": ",
++                  static_cast<uword>(start + current_pc_offset),
++                  static_cast<uword>(start + current_pc_offset + arg - 1));
+         for (intptr_t i = 0; i < function_stack.length(); i++) {
+           THR_Print("%s@%s", function_stack[i]->ToCString(),
+                     token_positions[i].ToCString());
+@@ -797,7 +799,8 @@ void CodeSourceMapReader::DumpSourcePositions(uword start) {
+       }
+       case CodeSourceMapOps::kNullCheck: {
+         THR_Print("%" Px "-%" Px ": null check PP#%" Pd32 "\n",
+-                  start + current_pc_offset, start + current_pc_offset, arg);
++                  static_cast<uword>(start + current_pc_offset),
++                  static_cast<uword>(start + current_pc_offset), arg);
+         break;
+       }
+       default:
+diff --git a/runtime/vm/compiler/assembler/assembler_arm.cc b/runtime/vm/compiler/assembler/assembler_arm.cc
+index a40179a9..3ec9862b 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm.cc
+@@ -2181,7 +2181,7 @@ int32_t Assembler::EncodeBranchOffset(int32_t offset, int32_t inst) {
+   return (inst & ~kBranchOffsetMask) | offset;
+ }
+ 
+-int Assembler::DecodeBranchOffset(int32_t inst) {
++int32_t Assembler::DecodeBranchOffset(int32_t inst) {
+   // Sign-extend, left-shift by 2, then add 8.
+   return ((((inst & kBranchOffsetMask) << 8) >> 6) + Instr::kPCReadOffset);
+ }
+diff --git a/runtime/vm/compiler/assembler/disassembler.cc b/runtime/vm/compiler/assembler/disassembler.cc
+index 6b59c0f3..e1ca9c65 100644
+--- a/runtime/vm/compiler/assembler/disassembler.cc
++++ b/runtime/vm/compiler/assembler/disassembler.cc
+@@ -307,17 +307,18 @@ void Disassembler::DisassembleCodeHelper(const char* function_fullname,
+       var_descriptors.GetInfo(i, &var_info);
+       const int8_t kind = var_info.kind();
+       if (kind == UntaggedLocalVarDescriptors::kSavedCurrentContext) {
+-        THR_Print("  saved current CTX reg offset %d\n", var_info.index());
++        THR_Print("  saved current CTX reg offset %" Pd32 "\n",
++                  var_info.index());
+       } else {
+         if (kind == UntaggedLocalVarDescriptors::kContextLevel) {
+-          THR_Print("  context level %d scope %d", var_info.index(),
++          THR_Print("  context level %" Pd32 " scope %d", var_info.index(),
+                     var_info.scope_id);
+         } else if (kind == UntaggedLocalVarDescriptors::kStackVar) {
+-          THR_Print("  stack var '%s' offset %d", var_name.ToCString(),
++          THR_Print("  stack var '%s' offset %" Pd32, var_name.ToCString(),
+                     var_info.index());
+         } else {
+           ASSERT(kind == UntaggedLocalVarDescriptors::kContextVar);
+-          THR_Print("  context var '%s' level %d offset %d",
++          THR_Print("  context var '%s' level %d offset %" Pd32,
+                     var_name.ToCString(), var_info.scope_id, var_info.index());
+         }
+         THR_Print(" (valid %s-%s)\n", var_info.begin_pos.ToCString(),
+diff --git a/runtime/vm/compiler/assembler/disassembler_arm.cc b/runtime/vm/compiler/assembler/disassembler_arm.cc
+index 89a0ad2d..c527a05d 100644
+--- a/runtime/vm/compiler/assembler/disassembler_arm.cc
++++ b/runtime/vm/compiler/assembler/disassembler_arm.cc
+@@ -177,7 +177,7 @@ void ARMDecoder::PrintShiftImm(Instr* instr) {
+   int32_t immed8 = instr->Immed8Field();
+   int32_t imm = Utils::RotateRight(immed8, rotate);
+   buffer_pos_ += Utils::SNPrint(current_position_in_buffer(),
+-                                remaining_size_in_buffer(), "#%d", imm);
++                                remaining_size_in_buffer(), "#%" Pd32, imm);
+ }
+ 
+ // Print PU formatting to reduce complexity of FormatOption.
+@@ -439,8 +439,9 @@ int ARMDecoder::FormatOption(Instr* instr, const char* format) {
+             idx = imm4 >> 2;
+           else if ((imm4 & 4) != 0)
+             idx = imm4 >> 3;
+-          buffer_pos_ += Utils::SNPrint(current_position_in_buffer(),
+-                                        remaining_size_in_buffer(), "%d", idx);
++          buffer_pos_ +=
++              Utils::SNPrint(current_position_in_buffer(),
++                             remaining_size_in_buffer(), "%" Pd32, idx);
+           return 9;
+         } else {
+           ASSERT(STRING_STARTS_WITH(format, "imm4_12"));
+@@ -528,7 +529,7 @@ int ARMDecoder::FormatOption(Instr* instr, const char* format) {
+       } else if (format[1] == 'v') {  // 'svc
+         ASSERT(STRING_STARTS_WITH(format, "svc"));
+         buffer_pos_ += Utils::SNPrint(current_position_in_buffer(),
+-                                      remaining_size_in_buffer(), "0x%x",
++                                      remaining_size_in_buffer(), "0x%" Px32,
+                                       instr->SvcField());
+         return 3;
+       } else if (format[1] == 'z') {
+@@ -569,7 +570,7 @@ int ARMDecoder::FormatOption(Instr* instr, const char* format) {
+       ASSERT(STRING_STARTS_WITH(format, "target"));
+       int32_t off = (static_cast<uint32_t>(instr->SImmed24Field()) << 2) + 8;
+       buffer_pos_ += Utils::SNPrint(current_position_in_buffer(),
+-                                    remaining_size_in_buffer(), "%+d", off);
++                                    remaining_size_in_buffer(), "%+" Pd32, off);
+       return 6;
+     }
+     case 'u': {  // 'u: signed or unsigned multiplies.
+@@ -1551,7 +1552,8 @@ void Disassembler::DecodeInstruction(char* hex_buffer,
+   ARMDecoder decoder(human_buffer, human_size);
+   decoder.InstructionDecode(pc);
+   int32_t instruction_bits = Instr::At(pc)->InstructionBits();
+-  Utils::SNPrint(hex_buffer, hex_size, "%08x", instruction_bits);
++  Utils::SNPrint(hex_buffer, hex_size, "%08" Px32,
++                 static_cast<uint32_t>(instruction_bits));
+   if (out_instr_size != nullptr) {
+     *out_instr_size = Instr::kInstrSize;
+   }
+diff --git a/runtime/vm/compiler/backend/il_printer.cc b/runtime/vm/compiler/backend/il_printer.cc
+index 679df3f5..0af2848c 100644
+--- a/runtime/vm/compiler/backend/il_printer.cc
++++ b/runtime/vm/compiler/backend/il_printer.cc
+@@ -1610,18 +1610,19 @@ void MemoryCopyInstr::PrintOperandsTo(BaseTextBuffer* f) const {
+   auto& cls =
+       Class::Handle(IsolateGroup::Current()->class_table()->At(dest_cid_));
+   if (!cls.IsNull()) {
+-    f->Printf(", dest_cid=%s (%d)", cls.ScrubbedNameCString(), dest_cid_);
++    f->Printf(", dest_cid=%s (%" Pd32 ")", cls.ScrubbedNameCString(),
++              dest_cid_);
+   } else {
+-    f->Printf(", dest_cid=%d", dest_cid_);
++    f->Printf(", dest_cid=%" Pd32, dest_cid_);
+   }
+   if (dest()->definition()->representation() == kUntagged) {
+     f->Printf(" [untagged]");
+   }
+   cls = IsolateGroup::Current()->class_table()->At(src_cid_);
+   if (!cls.IsNull()) {
+-    f->Printf(", src_cid=%s (%d)", cls.ScrubbedNameCString(), src_cid_);
++    f->Printf(", src_cid=%s (%" Pd32 ")", cls.ScrubbedNameCString(), src_cid_);
+   } else {
+-    f->Printf(", src_cid=%d", src_cid_);
++    f->Printf(", src_cid=%" Pd32, src_cid_);
+   }
+   if (src()->definition()->representation() == kUntagged) {
+     f->Printf(" [untagged]");
+diff --git a/runtime/vm/compiler/backend/locations.cc b/runtime/vm/compiler/backend/locations.cc
+index f7964c7f..6a410265 100644
+--- a/runtime/vm/compiler/backend/locations.cc
++++ b/runtime/vm/compiler/backend/locations.cc
+@@ -128,7 +128,7 @@ Representation RepresentationUtils::RepresentationOfArrayElement(
+     case kTypedDataFloat64x2ArrayCid:
+       return kUnboxedFloat64x2;
+     default:
+-      FATAL("Unexpected array cid %u", cid);
++      FATAL("Unexpected array cid %" Pd32, cid);
+       return kTagged;
+   }
+ }
+diff --git a/runtime/vm/compiler/ffi/abi.cc b/runtime/vm/compiler/ffi/abi.cc
+index f900b663..17b08519 100644
+--- a/runtime/vm/compiler/ffi/abi.cc
++++ b/runtime/vm/compiler/ffi/abi.cc
+@@ -59,6 +59,8 @@ static_assert(offsetof(AbiAlignmentUint64, i) == 8,
+ #else
+ #define DART_TARGET_OS_NAME MacOS
+ #endif
++#elif defined(DART_TARGET_OS_CTR)
++#define DART_TARGET_OS_NAME Ctr
+ #elif defined(DART_TARGET_OS_WINDOWS)
+ #define DART_TARGET_OS_NAME Windows
+ #else
+diff --git a/runtime/vm/compiler/ffi/abi.h b/runtime/vm/compiler/ffi/abi.h
+index 78865d37..f3a686bc 100644
+--- a/runtime/vm/compiler/ffi/abi.h
++++ b/runtime/vm/compiler/ffi/abi.h
+@@ -40,11 +40,12 @@ enum class Abi {
+   kWindowsArm64,
+   kWindowsIA32,
+   kWindowsX64,
++  kCtrArm,
+ 
+   kMacOSRiscv64 = kLinuxRiscv64,  // To build simriscv64 on Mac.
+ };
+ 
+-const int64_t num_abis = static_cast<int64_t>(Abi::kWindowsX64) + 1;
++const int64_t num_abis = static_cast<int64_t>(Abi::kCtrArm) + 1;
+ 
+ // We use the integer values of this enum in
+ // - runtime/vm/compiler/ffi/native_type.cc
+@@ -53,7 +54,9 @@ static_assert(static_cast<int64_t>(Abi::kAndroidArm) == 0,
+               "Enum value unexpected.");
+ static_assert(static_cast<int64_t>(Abi::kWindowsX64) == 23,
+               "Enum value unexpected.");
+-static_assert(num_abis == 24, "Enum value unexpected.");
++static_assert(static_cast<int64_t>(Abi::kCtrArm) == 24,
++              "Enum value unexpected.");
++static_assert(num_abis == 25, "Enum value unexpected.");
+ 
+ // The target ABI. Defines sizes and alignment of native types.
+ Abi TargetAbi();
+diff --git a/runtime/vm/dart.cc b/runtime/vm/dart.cc
+index 524997eb..b0f2bacb 100644
+--- a/runtime/vm/dart.cc
++++ b/runtime/vm/dart.cc
+@@ -991,6 +991,8 @@ char* Dart::FeaturesString(IsolateGroup* isolate_group, Snapshot::Kind kind) {
+     buffer.AddString(" linux");
+ #elif defined(DART_TARGET_OS_WINDOWS)
+     buffer.AddString(" windows");
++#elif defined(DART_TARGET_OS_CTR)
++    buffer.AddString(" ctr");
+ #else
+ #error What operating system?
+ #endif
+diff --git a/runtime/vm/deferred_objects.cc b/runtime/vm/deferred_objects.cc
+index 4cdeab8e..1a738a94 100644
+--- a/runtime/vm/deferred_objects.cc
++++ b/runtime/vm/deferred_objects.cc
+@@ -79,7 +79,8 @@ void DeferredInt32x4::Materialize(DeoptContext* deopt_context) {
+     uint32_t y = raw_int32x4->untag()->y();
+     uint32_t z = raw_int32x4->untag()->z();
+     uint32_t w = raw_int32x4->untag()->w();
+-    OS::PrintErr("materializing Int32x4 at %" Px ": %x,%x,%x,%x\n",
++    OS::PrintErr("materializing Int32x4 at %" Px ": %" Px32 ",%" Px32 ",%" Px32
++                 ",%" Px32 "\n",
+                  reinterpret_cast<uword>(slot()), x, y, z, w);
+   }
+ }
+diff --git a/runtime/vm/isolate_reload.cc b/runtime/vm/isolate_reload.cc
+index b7be4d80..9b1fb818 100644
+--- a/runtime/vm/isolate_reload.cc
++++ b/runtime/vm/isolate_reload.cc
+@@ -390,7 +390,7 @@ static const char* BoxCidToCString(intptr_t box_cid) {
+ 
+ void InstanceMorpher::Dump() const {
+   LogBlock blocker;
+-  THR_Print("Morphing objects with cid: %d via this mapping: ", cid_);
++  THR_Print("Morphing objects with cid: %" Pd32 " via this mapping: ", cid_);
+   for (int i = 0; i < mapping_->length(); i += 2) {
+     const auto& from = mapping_->At(i);
+     const auto& to = mapping_->At(i + 1);
+diff --git a/runtime/vm/kernel.cc b/runtime/vm/kernel.cc
+index 82492700..915441c0 100644
+--- a/runtime/vm/kernel.cc
++++ b/runtime/vm/kernel.cc
+@@ -325,9 +325,7 @@ class MetadataEvaluator : public KernelReaderHelper {
+         VariableHelper variable_helper(this);
+         variable_helper.ReadUntilExcluding(VariableHelper::kAnnotations);
+       } else {
+-        FATAL("No support for metadata on this type of kernel node: %" Pd32
+-              "\n",
+-              tag);
++        FATAL("No support for metadata on this type of kernel node: %d\n", tag);
+       }
+     }
+ 
+diff --git a/runtime/vm/object.cc b/runtime/vm/object.cc
+index 9de49b5d..f66f4bfa 100644
+--- a/runtime/vm/object.cc
++++ b/runtime/vm/object.cc
+@@ -16461,7 +16461,7 @@ void CompressedStackMaps::WriteToBuffer(BaseTextBuffer* buffer,
+     if (!first_entry) {
+       buffer->AddString(separator);
+     }
+-    buffer->Printf("0x%.8" Px ": ", base + it.pc_offset());
++    buffer->Printf("0x%.8" Px ": ", static_cast<uword>(base + it.pc_offset()));
+     for (intptr_t i = 0, n = it.Length(); i < n; i++) {
+       buffer->AddString(it.IsObject(i) ? "1" : "0");
+     }
+@@ -16604,7 +16604,8 @@ static int PrintVarInfo(char* buffer,
+                           "%2" Pd
+                           " %-13s level=%-3d"
+                           " begin=%-3d end=%d\n",
+-                          i, LocalVarDescriptors::KindToCString(kind), index,
++                          i, LocalVarDescriptors::KindToCString(kind),
++                          static_cast<int>(index),
+                           static_cast<int>(info.begin_pos.Pos()),
+                           static_cast<int>(info.end_pos.Pos()));
+   } else if (kind == UntaggedLocalVarDescriptors::kContextVar) {
+@@ -16613,8 +16614,8 @@ static int PrintVarInfo(char* buffer,
+         "%2" Pd
+         " %-13s level=%-3d index=%-3d"
+         " begin=%-3d end=%-3d name=%s\n",
+-        i, LocalVarDescriptors::KindToCString(kind), info.scope_id, index,
+-        static_cast<int>(info.begin_pos.Pos()),
++        i, LocalVarDescriptors::KindToCString(kind), info.scope_id,
++        static_cast<int>(index), static_cast<int>(info.begin_pos.Pos()),
+         static_cast<int>(info.end_pos.Pos()), var_name.ToCString());
+   } else {
+     return Utils::SNPrint(
+@@ -16622,8 +16623,8 @@ static int PrintVarInfo(char* buffer,
+         "%2" Pd
+         " %-13s scope=%-3d index=%-3d"
+         " begin=%-3d end=%-3d name=%s\n",
+-        i, LocalVarDescriptors::KindToCString(kind), info.scope_id, index,
+-        static_cast<int>(info.begin_pos.Pos()),
++        i, LocalVarDescriptors::KindToCString(kind), info.scope_id,
++        static_cast<int>(index), static_cast<int>(info.begin_pos.Pos()),
+         static_cast<int>(info.end_pos.Pos()), var_name.ToCString());
+   }
+ }
+@@ -16829,7 +16830,7 @@ void ExceptionHandlers::WriteToBuffer(BaseTextBuffer* buffer,
+     const intptr_t num_types =
+         handled_types.IsNull() ? 0 : handled_types.Length();
+     buffer->Printf("%" Pd " => %#" Px "  (%" Pd " types) (outer %d)%s%s\n", i,
+-                   base + info.handler_pc_offset, num_types,
++                   static_cast<uword>(base + info.handler_pc_offset), num_types,
+                    info.outer_try_index,
+                    ((info.needs_stacktrace != 0) ? " (needs stack trace)" : ""),
+                    ((info.is_generated != 0) ? " (generated)" : ""));
+@@ -20399,7 +20400,7 @@ void SubtypeTestCache::WriteCurrentEntryToBuffer(
+       const auto type_class_id = test_type.type_class_id();
+       buffer->Printf("%sinstantiated type: %s", separator,
+                      test_type.ToCString());
+-      buffer->Printf("%sinstantiated type class id: %d", separator,
++      buffer->Printf("%sinstantiated type class id: %" Pd32, separator,
+                      type_class_id);
+     }
+   }
+diff --git a/runtime/vm/raw_object.cc b/runtime/vm/raw_object.cc
+index 9f044a1e..62d6b333 100644
+--- a/runtime/vm/raw_object.cc
++++ b/runtime/vm/raw_object.cc
+@@ -341,8 +341,8 @@ intptr_t UntaggedObject::VisitPointersPredefined(ObjectPointerVisitor* visitor,
+       size = HeapSize();
+       break;
+     default:
+-      FATAL("Invalid cid: %" Pd ", obj: %p, tags: %x. Corrupt heap?", class_id,
+-            this, static_cast<uint32_t>(tags_));
++      FATAL("Invalid cid: %" Pd ", obj: %p, tags: %" Px32 ". Corrupt heap?",
++            class_id, this, static_cast<uint32_t>(tags_));
+       break;
+   }
+ 
+diff --git a/runtime/vm/regexp/regexp-bytecode-generator.cc b/runtime/vm/regexp/regexp-bytecode-generator.cc
+index b6450a24..f7ef050c 100644
+--- a/runtime/vm/regexp/regexp-bytecode-generator.cc
++++ b/runtime/vm/regexp/regexp-bytecode-generator.cc
+@@ -402,7 +402,7 @@ void RegExpBytecodeGenerator::CheckCharacterGT(uint16_t limit,
+   Emit<RegExpBytecode::kCheckCharacterGT>(limit, on_greater);
+ }
+ 
+-void RegExpBytecodeGenerator::CheckCharacter(uint32_t c, V8Label* on_equal) {
++void RegExpBytecodeGenerator::CheckCharacter(unsigned c, V8Label* on_equal) {
+   if (c > kMaxSingleCharValue) {
+     Emit<RegExpBytecode::kCheck4Chars>(c, on_equal);
+   } else {
+@@ -420,7 +420,7 @@ void RegExpBytecodeGenerator::CheckNotAtStart(int cp_offset,
+   Emit<RegExpBytecode::kCheckNotAtStart>(cp_offset, on_not_at_start);
+ }
+ 
+-void RegExpBytecodeGenerator::CheckNotCharacter(uint32_t c,
++void RegExpBytecodeGenerator::CheckNotCharacter(unsigned c,
+                                                 V8Label* on_not_equal) {
+   if (c > kMaxSingleCharValue) {
+     Emit<RegExpBytecode::kCheckNot4Chars>(c, on_not_equal);
+@@ -429,8 +429,8 @@ void RegExpBytecodeGenerator::CheckNotCharacter(uint32_t c,
+   }
+ }
+ 
+-void RegExpBytecodeGenerator::CheckCharacterAfterAnd(uint32_t c,
+-                                                     uint32_t mask,
++void RegExpBytecodeGenerator::CheckCharacterAfterAnd(unsigned c,
++                                                     unsigned mask,
+                                                      V8Label* on_equal) {
+   // TODO(pthier): This is super hacky. We could still check for 4 characters
+   // (with the last 2 being 0 after masking them), but not emit AndCheck4Chars.
+@@ -442,8 +442,8 @@ void RegExpBytecodeGenerator::CheckCharacterAfterAnd(uint32_t c,
+   }
+ }
+ 
+-void RegExpBytecodeGenerator::CheckNotCharacterAfterAnd(uint32_t c,
+-                                                        uint32_t mask,
++void RegExpBytecodeGenerator::CheckNotCharacterAfterAnd(unsigned c,
++                                                        unsigned mask,
+                                                         V8Label* on_not_equal) {
+   // TODO(pthier): This is super hacky. We could still check for 4 characters
+   // (with the last 2 being 0 after masking them), but not emit AndCheck4Chars.
+diff --git a/runtime/vm/regexp/regexp-compiler-tonode.cc b/runtime/vm/regexp/regexp-compiler-tonode.cc
+index 93511315..ef99fdd8 100644
+--- a/runtime/vm/regexp/regexp-compiler-tonode.cc
++++ b/runtime/vm/regexp/regexp-compiler-tonode.cc
+@@ -848,8 +848,9 @@ int CompareFirstCharCaseInsensitive(RegExpTree* const* a,
+                                     RegExpTree* const* b) {
+   RegExpAtom* atom1 = FirstAtom(*a);
+   RegExpAtom* atom2 = FirstAtom(*b);
+-  return CompareCaseInsensitive(icu::UnicodeString{atom1->data().at(0)},
+-                                icu::UnicodeString{atom2->data().at(0)});
++  return CompareCaseInsensitive(
++      icu::UnicodeString{static_cast<UChar32>(atom1->data().at(0))},
++      icu::UnicodeString{static_cast<UChar32>(atom2->data().at(0))});
+ }
+ 
+ bool Equals(bool ignore_case,
+@@ -864,8 +865,9 @@ bool CharAtEquals(bool ignore_case,
+                   int index,
+                   const RegExpAtom* a,
+                   const RegExpAtom* b) {
+-  return Equals(ignore_case, icu::UnicodeString{a->data().at(index)},
+-                icu::UnicodeString{b->data().at(index)});
++  return Equals(ignore_case,
++                icu::UnicodeString{static_cast<UChar32>(a->data().at(index))},
++                icu::UnicodeString{static_cast<UChar32>(b->data().at(index))});
+ }
+ 
+ #else
+@@ -998,7 +1000,7 @@ void RegExpDisjunction::RationalizeConsecutiveAtoms(RegExpCompiler* compiler) {
+     RegExpAtom* const atom = FirstAtom(alternative);
+ 
+ #ifdef V8_INTL_SUPPORT
+-    icu::UnicodeString common_prefix(atom->data().at(0));
++    icu::UnicodeString common_prefix(static_cast<UChar32>(atom->data().at(0)));
+ #else
+     unibrow::Mapping<unibrow::Ecma262Canonicalize>* const canonicalize =
+         compiler->isolate()->regexp_macro_assembler_canonicalize();
+@@ -1015,7 +1017,8 @@ void RegExpDisjunction::RationalizeConsecutiveAtoms(RegExpCompiler* compiler) {
+       if (!StartsWithAtom(alternative)) break;
+       RegExpAtom* const alt_atom = FirstAtom(alternative);
+ #ifdef V8_INTL_SUPPORT
+-      icu::UnicodeString new_prefix(alt_atom->data().at(0));
++      icu::UnicodeString new_prefix(
++          static_cast<UChar32>(alt_atom->data().at(0)));
+       if (!Equals(ignore_case, new_prefix, common_prefix)) break;
+ #else
+       unibrow::uchar new_prefix = alt_atom->data().at(0);
+diff --git a/runtime/vm/regexp/regexp.cc b/runtime/vm/regexp/regexp.cc
+index 034616d2..f83df6dc 100644
+--- a/runtime/vm/regexp/regexp.cc
++++ b/runtime/vm/regexp/regexp.cc
+@@ -506,7 +506,7 @@ ObjectPtr RegExpStatics::Interpret(Thread* thread,
+ 
+   int register_count = regexp.num_registers(is_one_byte);
+   ASSERT(register_count >= 2);
+-  int32_t* registers = thread->zone()->Alloc<int32_t>(register_count);
++  int* registers = thread->zone()->Alloc<int>(register_count);
+ 
+   for (intptr_t i = 0; i < register_count; i++) {
+     registers[i] = -1;
+diff --git a/runtime/vm/runtime_entry.cc b/runtime/vm/runtime_entry.cc
+index 5ddaee6d..194adbb8 100644
+--- a/runtime/vm/runtime_entry.cc
++++ b/runtime/vm/runtime_entry.cc
+@@ -859,7 +859,7 @@ static void PrintSubtypeCheck(const AbstractType& subtype,
+   ASSERT(caller_frame != nullptr);
+ 
+   LogBlock lb;
+-  THR_Print("SubtypeCheck: '%s' %d %s '%s' %d (pc: %#" Px ").\n",
++  THR_Print("SubtypeCheck: '%s' %" Pd32 " %s '%s' %" Pd32 " (pc: %#" Px ").\n",
+             subtype.NameCString(), subtype.type_class_id(),
+             result ? "is" : "is !", supertype.NameCString(),
+             supertype.type_class_id(), caller_frame->pc());
+@@ -2389,7 +2389,7 @@ static void PrintTypeCheck(const char* message,
+          (instance.IsClosure() && instance_type.IsInstantiated(kCurrentClass)));
+   LogBlock lb;
+   if (type.IsInstantiated()) {
+-    THR_Print("%s: '%s' %d %s '%s' %d (pc: %#" Px ").\n", message,
++    THR_Print("%s: '%s' %" Pd32 " %s '%s' %" Pd32 " (pc: %#" Px ").\n", message,
+               instance_type.NameCString(), instance_type.type_class_id(),
+               (result.ptr() == Bool::True().ptr()) ? "is" : "is !",
+               type.NameCString(), type.type_class_id(), caller_frame->pc());
+diff --git a/sdk/lib/_internal/vm/lib/ffi_patch.dart b/sdk/lib/_internal/vm/lib/ffi_patch.dart
+index 8a469e58..76f231b3 100644
+--- a/sdk/lib/_internal/vm/lib/ffi_patch.dart
++++ b/sdk/lib/_internal/vm/lib/ffi_patch.dart
+@@ -50,6 +50,7 @@ int get _intPtrSize => (const [
+   8, // windowsArm64,
+   4, // windowsIA32,
+   8, // windowsX64,
++  4, // ctrArm,
+ ])[_abi()];
+ 
+ @pragma("vm:prefer-inline")
+diff --git a/sdk/lib/ffi/abi.dart b/sdk/lib/ffi/abi.dart
+index 8d00ca9e..df50fb66 100644
+--- a/sdk/lib/ffi/abi.dart
++++ b/sdk/lib/ffi/abi.dart
+@@ -93,6 +93,9 @@ class Abi {
+   /// The application binary interface for Windows on the X64 architecture.
+   static const windowsX64 = _windowsX64;
+ 
++  /// The internal native layout for CTR on Arm. Public FFI is unqualified.
++  static const ctrArm = _ctrArm;
++
+   /// The ABIs that the DartVM can run on.
+   static const values = [
+     androidArm,
+@@ -119,6 +122,7 @@ class Abi {
+     windowsArm64,
+     windowsIA32,
+     windowsX64,
++    ctrArm,
+   ];
+ 
+   /// The ABI the Dart VM is currently running on.
+@@ -165,10 +169,11 @@ class Abi {
+   static const _windowsArm64 = Abi._(_Architecture.arm64, _OS.windows);
+   static const _windowsIA32 = Abi._(_Architecture.ia32, _OS.windows);
+   static const _windowsX64 = Abi._(_Architecture.x64, _OS.windows);
++  static const _ctrArm = Abi._(_Architecture.arm, _OS.ctr);
+ }
+ 
+ /// The hardware architectures the Dart VM runs on.
+ enum _Architecture { arm, arm64, arm64e, ia32, x64, riscv32, riscv64 }
+ 
+ /// The operating systems the Dart VM runs on.
+-enum _OS { android, fuchsia, ios, linux, macos, windows }
++enum _OS { android, fuchsia, ios, linux, macos, windows, ctr }
+diff --git a/sdk/lib/ffi/c_type.dart b/sdk/lib/ffi/c_type.dart
+index 911256d9..dae467ad 100644
+--- a/sdk/lib/ffi/c_type.dart
++++ b/sdk/lib/ffi/c_type.dart
+@@ -47,6 +47,7 @@ part of "dart:ffi";
+   Abi.windowsArm64: Int8(),
+   Abi.windowsIA32: Int8(),
+   Abi.windowsX64: Int8(),
++  Abi.ctrArm: Uint8(),
+ })
+ final class Char extends AbiSpecificInteger {
+   const Char();
+@@ -88,6 +89,7 @@ final class Char extends AbiSpecificInteger {
+   Abi.windowsArm64: Int8(),
+   Abi.windowsIA32: Int8(),
+   Abi.windowsX64: Int8(),
++  Abi.ctrArm: Int8(),
+ })
+ final class SignedChar extends AbiSpecificInteger {
+   const SignedChar();
+@@ -129,6 +131,7 @@ final class SignedChar extends AbiSpecificInteger {
+   Abi.windowsArm64: Uint8(),
+   Abi.windowsIA32: Uint8(),
+   Abi.windowsX64: Uint8(),
++  Abi.ctrArm: Uint8(),
+ })
+ final class UnsignedChar extends AbiSpecificInteger {
+   const UnsignedChar();
+@@ -170,6 +173,7 @@ final class UnsignedChar extends AbiSpecificInteger {
+   Abi.windowsArm64: Int16(),
+   Abi.windowsIA32: Int16(),
+   Abi.windowsX64: Int16(),
++  Abi.ctrArm: Int16(),
+ })
+ final class Short extends AbiSpecificInteger {
+   const Short();
+@@ -211,6 +215,7 @@ final class Short extends AbiSpecificInteger {
+   Abi.windowsArm64: Uint16(),
+   Abi.windowsIA32: Uint16(),
+   Abi.windowsX64: Uint16(),
++  Abi.ctrArm: Uint16(),
+ })
+ final class UnsignedShort extends AbiSpecificInteger {
+   const UnsignedShort();
+@@ -252,6 +257,7 @@ final class UnsignedShort extends AbiSpecificInteger {
+   Abi.windowsArm64: Int32(),
+   Abi.windowsIA32: Int32(),
+   Abi.windowsX64: Int32(),
++  Abi.ctrArm: Int32(),
+ })
+ final class Int extends AbiSpecificInteger {
+   const Int();
+@@ -293,6 +299,7 @@ final class Int extends AbiSpecificInteger {
+   Abi.windowsArm64: Uint32(),
+   Abi.windowsIA32: Uint32(),
+   Abi.windowsX64: Uint32(),
++  Abi.ctrArm: Uint32(),
+ })
+ final class UnsignedInt extends AbiSpecificInteger {
+   const UnsignedInt();
+@@ -335,6 +342,7 @@ final class UnsignedInt extends AbiSpecificInteger {
+   Abi.windowsArm64: Int32(),
+   Abi.windowsIA32: Int32(),
+   Abi.windowsX64: Int32(),
++  Abi.ctrArm: Int32(),
+ })
+ final class Long extends AbiSpecificInteger {
+   const Long();
+@@ -377,6 +385,7 @@ final class Long extends AbiSpecificInteger {
+   Abi.windowsArm64: Uint32(),
+   Abi.windowsIA32: Uint32(),
+   Abi.windowsX64: Uint32(),
++  Abi.ctrArm: Uint32(),
+ })
+ final class UnsignedLong extends AbiSpecificInteger {
+   const UnsignedLong();
+@@ -418,6 +427,7 @@ final class UnsignedLong extends AbiSpecificInteger {
+   Abi.windowsArm64: Int64(),
+   Abi.windowsIA32: Int64(),
+   Abi.windowsX64: Int64(),
++  Abi.ctrArm: Int64(),
+ })
+ final class LongLong extends AbiSpecificInteger {
+   const LongLong();
+@@ -459,6 +469,7 @@ final class LongLong extends AbiSpecificInteger {
+   Abi.windowsArm64: Uint64(),
+   Abi.windowsIA32: Uint64(),
+   Abi.windowsX64: Uint64(),
++  Abi.ctrArm: Uint64(),
+ })
+ final class UnsignedLongLong extends AbiSpecificInteger {
+   const UnsignedLongLong();
+@@ -495,6 +506,7 @@ final class UnsignedLongLong extends AbiSpecificInteger {
+   Abi.windowsArm64: Int64(),
+   Abi.windowsIA32: Int32(),
+   Abi.windowsX64: Int64(),
++  Abi.ctrArm: Int32(),
+ })
+ final class IntPtr extends AbiSpecificInteger {
+   const IntPtr();
+@@ -532,6 +544,7 @@ final class IntPtr extends AbiSpecificInteger {
+   Abi.windowsArm64: Uint64(),
+   Abi.windowsIA32: Uint32(),
+   Abi.windowsX64: Uint64(),
++  Abi.ctrArm: Uint32(),
+ })
+ final class UintPtr extends AbiSpecificInteger {
+   const UintPtr();
+@@ -569,6 +582,7 @@ final class UintPtr extends AbiSpecificInteger {
+   Abi.windowsArm64: Uint64(),
+   Abi.windowsIA32: Uint32(),
+   Abi.windowsX64: Uint64(),
++  Abi.ctrArm: Uint32(),
+ })
+ final class Size extends AbiSpecificInteger {
+   const Size();
+@@ -609,6 +623,7 @@ final class Size extends AbiSpecificInteger {
+   Abi.windowsArm64: Uint16(),
+   Abi.windowsIA32: Uint16(),
+   Abi.windowsX64: Uint16(),
++  Abi.ctrArm: Uint32(),
+ })
+ final class WChar extends AbiSpecificInteger {
+   const WChar();

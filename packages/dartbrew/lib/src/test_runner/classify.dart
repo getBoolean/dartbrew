@@ -1,14 +1,15 @@
 /// Maps error text from a test run on CTR to the unsupported API area that
 /// caused it (KTD10).
 ///
-/// The CTR launcher has no `dart:io` implementation. Its fallback resolver
-/// (`runtime/ctr/source/unsupported.cc`) makes every `dart:io` native throw
-/// `UnsupportedError: <Native> is not supported on CTR (dart:io)`, so the
-/// native's name, plus the stack, identifies the area. The table also keeps
-/// the VM's own unresolved-native text, `dart:ffi` and `dart:isolate`
-/// failure messages, and `package:test_api`'s `spawnHybridUri` error. The
-/// shapes must be confirmed by the device check (U1,
-/// `docs/ctr-supported-features.md`).
+/// The launcher links the SDK's `dart:io` layer ported to CTR. Files,
+/// directories, stdio, `Platform` and `exit` work; areas not ported yet fail
+/// with an `OSError` whose text is `<Area> is not supported on CTR
+/// (dart:io)`, so that text, plus the stack, identifies the area. Links,
+/// file watching and processes stay unsupported by design. The table also
+/// keeps the VM's own unresolved-native text (host drivers resolve no
+/// `dart:io` native), `dart:ffi` and `dart:isolate` failure messages, and
+/// `package:test_api`'s `spawnHybridUri` error. The shapes are recorded in
+/// `docs/ctr-supported-features.md`.
 library;
 
 /// One row of [unsupportedAreas]: an area name and the error text that
@@ -26,27 +27,16 @@ final class UnsupportedArea {
   String get message => '$name is not supported on CTR';
 }
 
-/// The VM's text for a call into a native that has no resolver, in JIT
-/// (`Failed to resolve native function 'File_Open' in '_File._open'`, a
-/// fatal error) and with dynamic modules (`native function 'File_Open'
-/// (2 arguments) cannot be found`). Group 1 is the native's name.
-final unresolvedNative = RegExp(r"native function '([A-Za-z0-9_]+)'");
-
 /// The classification table, checked in order; the first match wins.
 ///
-/// Order matters: `Process_Exit` is exit, not processes, and `IOService_`
-/// natives serve both sockets and files, so sockets are checked first.
+/// Order matters: `IOService_` natives serve sockets as well as the working
+/// file I/O, so only socket frames and messages name an area. Text from the
+/// working areas (files, stdio, `Platform`, `exit`) matches no row, so their
+/// ordinary failures are reported as they are.
 final List<UnsupportedArea> unsupportedAreas = [
   UnsupportedArea(
     'hybrid tests (spawnHybridUri and spawnHybridCode)',
     RegExp(r'spawnHybrid(Uri|Code)|Can.t connect to the test runner'),
-  ),
-  UnsupportedArea(
-    'stdout, stdin and exit()',
-    RegExp(
-      r'\b(Process_Exit|Stdout_\w+|Stdin_\w+|File_GetStdioHandleType|'
-      r'File_GetStdioHandle|_StdIOUtils)\b',
-    ),
   ),
   UnsupportedArea(
     'sockets',
@@ -54,20 +44,23 @@ final List<UnsupportedArea> unsupportedAreas = [
       r'\b(Socket_\w+|ServerSocket_\w+|RawSocketOption_\w+|'
       r'InternetAddress_\w+|NetworkInterface_\w+|SecureSocket_\w+|'
       r'SecurityContext_\w+|_NativeSocket|_NativeSynchronousSocket|'
-      r'_RawSocket|_RawServerSocket|_InternetAddress|_HttpClient)\b',
+      r'_RawSocket|_RawServerSocket|_InternetAddress|_HttpClient)\b|'
+      r'\b(Socket|InternetAddress|NetworkInterface|RawSynchronousSocket) '
+      r'is not supported on CTR',
     ),
   ),
   UnsupportedArea(
     'processes',
-    RegExp(r'\b(Process_\w+|_ProcessImpl|ProcessInfo_\w+)\b'),
-  ),
-  UnsupportedArea(
-    'file I/O',
     RegExp(
-      r'\b(File_\w+|Directory_\w+|FileSystemWatcher_\w+|IOService_\w+|'
-      r'Namespace_\w+|'
-      r'_File\.|_Directory\.|_RandomAccessFile|_IOService|_Link\.)',
+      r'\b(Process_Start|Process_Wait|Process_KillPid|_ProcessImpl|'
+      r'ProcessInfo_\w+)\b|\bProcess is not supported on CTR',
     ),
+  ),
+  // The SD card and romfs have no links.
+  UnsupportedArea('links', RegExp(r'\bLink is not supported on CTR')),
+  UnsupportedArea(
+    'file system watching',
+    RegExp(r'File system watching is not supported'),
   ),
   UnsupportedArea(
     'isolates',
@@ -83,10 +76,7 @@ final List<UnsupportedArea> unsupportedAreas = [
       r'\bFfi_\w+|\bDynamicLibrary\b',
     ),
   ),
-  // After the stack-based rows: Process.run and HttpClient reach a
-  // Platform_ native first, and their stacks name the real area.
-  UnsupportedArea('platform information (Platform)', RegExp(r'\bPlatform_\w+')),
-  // Any other native the launcher's dart:io fallback resolver refused.
+  // Any other area the CTR I/O layer or a host driver's resolver refused.
   UnsupportedArea('dart:io', RegExp(r'is not supported on CTR \(dart:io\)')),
 ];
 

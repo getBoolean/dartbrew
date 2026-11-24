@@ -87,25 +87,25 @@ final class RecordedStream {
     return stream;
   }
 
-  /// AE3: one pure-logic test and one that reads a file, which fails with
-  /// the VM's text for an unresolved `dart:io` native.
-  static RecordedStream fileIo() {
+  /// AE3: one pure-logic test and one that connects a socket, which fails
+  /// with the CTR I/O layer's text for an area not ported yet.
+  static RecordedStream unsupportedSocket() {
     final stream = RecordedStream();
-    final suite = stream.suite('test/io_test.dart');
+    final suite = stream.suite('test/net_test.dart');
     stream
-      ..plan(suite, ['adds', 'reads a file'])
+      ..plan(suite, ['adds', 'connects'])
       ..pass(suite, 'adds');
-    final reads = stream.start(suite, 'reads a file');
+    final connects = stream.start(suite, 'connects');
     stream
       ..error(
-        reads,
-        "Invalid argument(s): native function 'File_Open' (2 arguments) "
-        'cannot be found',
+        connects,
+        "SocketException: Failed host lookup: 'example.com' (OS Error: "
+        'InternetAddress is not supported on CTR (dart:io), errno = 38)',
         stackTrace:
-            'dart:io/file_impl.dart  _File._openSync\n'
-            'test/io_test.dart 7:30  main.<fn>',
+            'dart:io-patch/socket_patch.dart  _NativeSocket.lookup\n'
+            'test/net_test.dart 7:30  main.<fn>',
       )
-      ..testDone(reads, 'error')
+      ..testDone(connects, 'error')
       ..done();
     return stream;
   }

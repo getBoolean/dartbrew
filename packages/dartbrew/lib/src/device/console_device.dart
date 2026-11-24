@@ -1,31 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 
+import '../errors.dart';
 import '../targets/ctr/netloader.dart';
 import 'device.dart';
+import 'run_identity.dart';
 import 'transport.dart';
-
-/// The run identity keys passed to the launcher in argv, in this order.
-const _argvIdentityKeys = [
-  'schema',
-  'run_id',
-  'artifact_sha256',
-  'environment',
-  'fixture',
-  'mode',
-  'compatibility',
-  'build_id',
-];
-
-/// The launcher's schema-2 argv tokens for [identity] and the host listener
-/// on [hostPort] (see the "Launcher contract (schema 2)" runbook section).
-///
-/// The optional linked-value tokens are included too; they always equal the
-/// values linked into the uploaded app.
-List<String> launcherArguments(Map<String, Object> identity, int hostPort) => [
-  for (final key in _argvIdentityKeys) '--ctr-run=$key=${identity[key]}',
-  '--ctr-host-port=$hostPort',
-];
 
 /// A console reached through its netloader at [address].
 final class ConsoleDevice implements RunDevice {
@@ -39,7 +19,7 @@ final class ConsoleDevice implements RunDevice {
     : progress = progress ?? stderr;
 
   @override
-  String get environment => 'hardware';
+  RunEnvironment get environment => RunEnvironment.hardware;
 
   @override
   bool acceptsPeer(InternetAddress address) =>
@@ -47,13 +27,15 @@ final class ConsoleDevice implements RunDevice {
       address.address == this.address.address;
 
   /// Uploads [app] under its own file name, so the console saves it as
-  /// `sdmc:/3ds/<name>` and repeated runs overwrite it.
+  /// `sdmc:/3ds/<name>` and repeated runs overwrite it. The argv carries
+  /// the identity's launcher tokens, including the optional linked values,
+  /// which always equal the values linked into the uploaded app.
   @override
-  Future<void> launch(File app, Map<String, Object> identity, int hostPort) =>
+  Future<void> launch(File app, RunIdentity identity, int hostPort) =>
       transport.upload(
         address,
         app,
-        arguments: launcherArguments(identity, hostPort),
+        arguments: identity.launcherArguments(hostPort),
         onProgress: _reportProgress(),
       );
 
@@ -76,24 +58,12 @@ final class ConsoleDevice implements RunDevice {
   Future<void> dispose() async {}
 }
 
-/// Why no single console could be chosen.
-final class ConsoleSelectionException implements Exception {
-  /// The exit code: 1 when none answered, 64 when several did.
-  final int exitCode;
-  final String message;
-
-  const ConsoleSelectionException(this.exitCode, this.message);
-
-  @override
-  String toString() => message;
-}
-
 /// Finds the one console whose netloader answers within [wait].
 ///
 /// Tells [prompt] to open the netloader first. Once a console answers,
 /// listens [settle] longer so a second console is noticed rather than picked
-/// at random. Throws a [ConsoleSelectionException] when none or several
-/// answer, and passes on the transport's [NetloaderException]s.
+/// at random. Throws a [DartbrewException] with exit code 1 when none
+/// answers and 64 when several do, and passes on the transport's failures.
 Future<InternetAddress> discoverConsole(
   DeviceTransport transport, {
   required Duration wait,
@@ -132,7 +102,7 @@ Future<InternetAddress> discoverConsole(
     await subscription.cancel();
   }
   if (found.isEmpty) {
-    throw ConsoleSelectionException(
+    throw DartbrewException(
       1,
       'No console answered within ${_seconds(wait)}. Open Homebrew Launcher '
       'on the console and press Y to start the netloader, then run again. '
@@ -142,7 +112,7 @@ Future<InternetAddress> discoverConsole(
     );
   }
   if (found.length > 1) {
-    throw ConsoleSelectionException(
+    throw DartbrewException(
       64,
       'Found ${found.length} consoles; choose one with -d <ip>:\n'
       '${found.map((a) => '  ${a.address}').join('\n')}',

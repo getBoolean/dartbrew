@@ -1,0 +1,37 @@
+{
+  "count": 40,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "name": "20260610",
+      "digest": "sha256:116afba8df8453961de2936ffab20dd441edf4d682856c1ec8b0e53d7ed0bbf5",
+      "last_updated": "2026-06-10T13:53:15.282624Z"
+    },
+    {
+      "name": "latest",
+      "digest": "sha256:116afba8df8453961de2936ffab20dd441edf4d682856c1ec8b0e53d7ed0bbf5",
+      "last_updated": "2026-06-10T13:53:13.17405Z"
+    },
+    {
+      "name": "20260221",
+      "digest": "sha256:4debd5b33cf4361a557b6bf3be5ff823804868125ce1429912f1a4e773e7ac5d",
+      "last_updated": "2026-02-21T19:26:39.061636Z"
+    },
+    {
+      "name": "20260219",
+      "digest": "sha256:5edbd59a4b38a77e758681d3b058f818cf0de1e8a9a06d4f8d2eb11d6f53e96c",
+      "last_updated": "2026-02-19T17:46:27.371348Z"
+    },
+    {
+      "name": "20251231",
+      "digest": "sha256:0e0a00e966f32121297ad8ebceabf5e9ca0a408f3c020fdf21384e03b499f3a0",
+      "last_updated": "2025-12-31T23:00:56.400471Z"
+    },
+    {
+      "name": "20251117",
+      "digest": "sha256:de73e58afd7148ab1544477bbfd3b2354206ebe9af385e1240380a668b2b0676",
+      "last_updated": "2025-11-17T14:47:21.449735Z"
+    }
+  ]
+}

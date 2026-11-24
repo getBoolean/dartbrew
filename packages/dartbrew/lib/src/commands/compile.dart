@@ -6,8 +6,9 @@ import 'package:path/path.dart' as p;
 import '../native_directory.dart';
 import '../process.dart';
 import '../sdk.dart';
+import '../targets/ctr/package.dart';
 import '../targets/ctr/pipeline.dart';
-import '../targets/target.dart';
+import 'target_option.dart';
 
 /// The `compile` command, for registration in the runner.
 Command<int> compileCommand({ProcessStarter start = startProcess}) =>
@@ -26,12 +27,16 @@ class CompileCommand extends Command<int> {
   String get invocation => 'dartbrew compile [arguments] <entry.dart>';
 
   final ProcessStarter _start;
+  final Map<String, String>? environment;
   final IOSink? _out;
 
   /// [out] receives the success message; it defaults to standard output.
-  CompileCommand({ProcessStarter start = startProcess, IOSink? out})
-    : _start = start,
-      _out = out {
+  CompileCommand({
+    ProcessStarter start = startProcess,
+    IOSink? out,
+    this.environment,
+  }) : _start = start,
+       _out = out {
     addTargetOption(argParser);
     argParser
       ..addOption(
@@ -73,7 +78,6 @@ class CompileCommand extends Command<int> {
         usage,
       );
     }
-    final target = selectedTarget(args);
     final sdk = await NativeSdk.load(sdkDirectory(args));
     final entry = File(args.rest.single).resolveSymbolicLinksSync();
     final project = Directory(
@@ -105,20 +109,19 @@ class CompileCommand extends Command<int> {
     output.parent.createSync(recursive: true);
     createDirectoryExclusively(output.path);
     final work = Directory(p.join(output.path, 'work'))..createSync();
-    final build = await target.build(
+    final build = await buildCtrApplication(
       sdk: sdk,
       project: project,
       entry: entry,
       mode: BuildMode.values.byName(args.option('mode')!),
       fixture: fixture,
       work: work,
-      application: File(
-        p.join(output.path, 'application.${target.applicationExtension}'),
-      ),
+      application: File(p.join(output.path, 'application.3dsx')),
       offline: args.flag('offline'),
       start: _start,
+      environment: environment,
     );
-    target.package(sdk, build, output);
+    packageCtrApplication(sdk, build, output);
     final out = _out ?? stdout;
     out.writeln('Built ${build.application.path}');
     out.writeln(

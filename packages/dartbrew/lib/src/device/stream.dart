@@ -24,6 +24,12 @@ final class MalformedRecord extends RuntimeLine {
 /// the prefix (keepalive blanks, boot noise) are ignored. A line longer than
 /// [maxLineLength] is not kept: a prefixed one becomes a single
 /// [MalformedRecord], and the rest of it up to the next LF is skipped.
+///
+/// The launcher splits a long output line into output records marked
+/// `"continues": true`, each followed directly by the record that continues
+/// it. Those are joined back into one output record with the whole text. A
+/// marked record that is not followed by an output record of the same run
+/// (a journal left by a run that stopped mid-line) is dropped.
 final class RuntimeLineParser {
   static const prefix = 'CTR_RUNTIME ';
 
@@ -33,6 +39,9 @@ final class RuntimeLineParser {
   static final _prefixBytes = utf8.encode(prefix);
 
   final _pending = <int>[];
+
+  /// The output record whose text the next output record continues.
+  RuntimeRecord? _continued;
 
   /// Whether the current line went over [maxLineLength] and is skipped up
   /// to its LF.
@@ -64,6 +73,7 @@ final class RuntimeLineParser {
     } else {
       _emit(lines);
     }
+    _continued = null;
     return lines;
   }
 
@@ -81,7 +91,7 @@ final class RuntimeLineParser {
     for (var i = 0; prefixed && i < _prefixBytes.length; i++) {
       prefixed = _pending[i] == _prefixBytes[i];
     }
-    if (prefixed) lines.add(const MalformedRecord());
+    if (prefixed) lines.add(_join(const MalformedRecord())!);
     _pending.clear();
   }
 
@@ -91,15 +101,43 @@ final class RuntimeLineParser {
     final text = utf8.decode(_pending, allowMalformed: true);
     _pending.clear();
     if (!text.startsWith(prefix)) return;
+    RuntimeLine line;
     try {
       final record = jsonDecode(text.substring(prefix.length));
-      lines.add(
-        record is Map<String, Object?>
-            ? RuntimeRecord(record)
-            : const MalformedRecord(),
-      );
+      line = record is Map<String, Object?>
+          ? RuntimeRecord(record)
+          : const MalformedRecord();
     } on FormatException {
-      lines.add(const MalformedRecord());
+      line = const MalformedRecord();
     }
+    final joined = _join(line);
+    if (joined != null) lines.add(joined);
   }
+
+  /// Joins [line] to the continued output record, if any; null while more of
+  /// the text is to come.
+  RuntimeLine? _join(RuntimeLine line) {
+    final continued = _continued;
+    _continued = null;
+    var joined = line;
+    if (continued != null &&
+        line is RuntimeRecord &&
+        _isOutput(line) &&
+        line.fields['run_id'] == continued.fields['run_id']) {
+      joined = RuntimeRecord({
+        ...line.fields,
+        'text': '${continued.fields['text']}${line.fields['text']}',
+      });
+    }
+    if (joined is RuntimeRecord &&
+        _isOutput(joined) &&
+        joined.fields['continues'] == true) {
+      _continued = joined;
+      return null;
+    }
+    return joined;
+  }
+
+  static bool _isOutput(RuntimeRecord record) =>
+      record.fields['event'] == 'output' && record.fields['text'] is String;
 }

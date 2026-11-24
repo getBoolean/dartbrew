@@ -1,5 +1,6 @@
 """Public command integration tests using local Git repositories only."""
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -8,8 +9,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+import bootstrap  # noqa: E402
+from common import DEFAULT_MANIFEST, read_json, verify_icu  # noqa: E402
 
 
 def run(*args, cwd=None):
@@ -37,12 +42,6 @@ class ToolchainTest(unittest.TestCase):
         self.patch = self.base / 'port.patch'
         self.patch.write_bytes(patch.encode())
         self.git('restore', 'feature.txt', cwd=self.upstream)
-        self.profile = self.base / 'profile.json'
-        self.profile.write_text(json.dumps({'name': 'ctr-armv6k', 'target_os': 'ctr',
-            'target_cpu': 'arm', 'arm_version': 6, 'arm_fpu': 'vfp',
-            'arm_float_abi': 'hard', 'arm_use_neon': False,
-            'arm_use_integer_division': False, 'thread_pointer': 'soft',
-            'cflags': ['-marm', '-march=armv6k', '-mfpu=vfp', '-mfloat-abi=hard', '-mtp=soft']}))
         self.manifest = self.base / 'versions.json'
         self.data = {'schema_version': 1,
             'dart': {'repository': str(self.upstream), 'revision': self.rev, 'version': 'fixture'},
@@ -65,11 +64,9 @@ class ToolchainTest(unittest.TestCase):
         return run(sys.executable, ROOT / 'bootstrap.py', '--manifest', self.manifest,
                    '--source', self.source)
 
-    def identity(self, component='host', mode='aot'):
-        result = run(sys.executable, ROOT / 'build_sdk.py', 'identity', '--manifest', self.manifest,
-                     '--profile', self.profile, '--component', component, '--mode', mode)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        return json.loads(result.stdout)
+    def verify(self):
+        return run(sys.executable, ROOT / 'bootstrap.py', 'verify', '--manifest', self.manifest,
+                   '--source', self.source)
 
     def test_clean_materialization_reproduces_patch_and_is_idempotent(self):
         first = self.bootstrap()
@@ -83,6 +80,26 @@ class ToolchainTest(unittest.TestCase):
         state = json.loads(first.stdout)
         self.assertEqual(state['upstream_revision'], self.rev)
         self.assertEqual(state['patches'][0]['sha256'], self.data['patches'][0]['sha256'])
+
+    def test_verify_accepts_a_bootstrapped_checkout(self):
+        self.assertEqual(self.bootstrap().returncode, 0)
+        result = self.verify()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['upstream_revision'], self.rev)
+
+    def test_verify_names_a_patch_whose_hash_differs_from_its_pin(self):
+        self.assertEqual(self.bootstrap().returncode, 0)
+        self.patch.write_text('tampered')
+        result = self.verify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('patch hash mismatch', result.stderr)
+        self.assertIn(self.patch.name, result.stderr)
+
+    def test_verify_refuses_a_missing_checkout_without_creating_it(self):
+        result = self.verify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('unmanaged', result.stderr.lower())
+        self.assertFalse(self.source.exists())
 
     def test_dirty_source_is_refused_and_edits_survive(self):
         self.assertEqual(self.bootstrap().returncode, 0)
@@ -118,10 +135,6 @@ class ToolchainTest(unittest.TestCase):
         self.assertFalse(self.source.exists())
 
     def test_icu_patch_is_replayed_and_preserves_local_changes(self):
-        sys.path.insert(0, str(ROOT))
-        self.addCleanup(lambda: sys.path.remove(str(ROOT)))
-        from bootstrap import patch_icu
-        from common import verify_icu
         pin = {**self.data['dart'], 'patches': self.data['patches']}
         self.data['dependencies']['icu'] = pin
         self.save_manifest()
@@ -129,26 +142,26 @@ class ToolchainTest(unittest.TestCase):
         dependency.parent.mkdir(parents=True)
         self.git('clone', str(self.upstream), str(dependency), cwd=self.base)
         self.git('config', 'core.autocrlf', 'false', cwd=dependency)
-        patch_icu(self.source, self.data, self.manifest)
+        bootstrap.patch_icu(self.source, self.data, self.manifest)
         self.assertEqual((dependency / 'feature.txt').read_text(), 'ctr patch\n')
         head = self.git('rev-parse', 'HEAD', cwd=dependency).stdout
-        patch_icu(self.source, self.data, self.manifest)
+        bootstrap.patch_icu(self.source, self.data, self.manifest)
         self.assertEqual(self.git('rev-parse', 'HEAD', cwd=dependency).stdout, head)
         verify_icu(self.source, self.data)
         # gclient can restore the pinned clean dependency on a later sync.
         self.git('checkout', '--detach', self.rev, cwd=dependency)
-        patch_icu(self.source, self.data, self.manifest)
+        bootstrap.patch_icu(self.source, self.data, self.manifest)
         self.assertEqual(self.git('rev-parse', 'HEAD', cwd=dependency).stdout, head)
         (dependency / 'feature.txt').write_text('unexpected committed change\n')
         self.git('add', 'feature.txt', cwd=dependency)
         self.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
                  'commit', '-m', 'unexpected dependency commit', cwd=dependency)
         with self.assertRaisesRegex(RuntimeError, 'mismatch'):
-            patch_icu(self.source, self.data, self.manifest)
+            bootstrap.patch_icu(self.source, self.data, self.manifest)
         self.git('checkout', '--detach', head.strip(), cwd=dependency)
         (dependency / 'feature.txt').write_text('private edit\n')
         with self.assertRaisesRegex(RuntimeError, 'dirty'):
-            patch_icu(self.source, self.data, self.manifest)
+            bootstrap.patch_icu(self.source, self.data, self.manifest)
         self.assertEqual((dependency / 'feature.txt').read_text(), 'private edit\n')
         with self.assertRaisesRegex(RuntimeError, 'dirty'):
             verify_icu(self.source, self.data)
@@ -164,84 +177,12 @@ class ToolchainTest(unittest.TestCase):
         self.assertIn('hash', result.stderr.lower())
         self.assertFalse(self.source.exists())
 
-    def test_cache_identity_tracks_all_compatibility_inputs(self):
-        initial = self.identity()['cache_key']
-        self.assertNotEqual(initial, self.identity(mode='jit')['cache_key'])
-        self.assertNotEqual(initial, self.identity(component='target')['cache_key'])
-        self.data['dependencies']['depot_tools']['revision'] = '1' * 40
-        self.save_manifest()
-        self.assertNotEqual(initial, self.identity()['cache_key'])
-        self.data['dependencies']['depot_tools']['revision'] = self.rev
-        self.save_manifest()
-        profile = json.loads(self.profile.read_text())
-        profile['cflags'].append('-DNEW_PROFILE=1')
-        self.profile.write_text(json.dumps(profile))
-        self.assertNotEqual(initial, self.identity()['cache_key'])
-        profile['cflags'].pop()
-        self.profile.write_text(json.dumps(profile))
-        self.patch.write_text(self.patch.read_text() + '\n')
-        self.data['patches'][0]['sha256'] = hashlib.sha256(self.patch.read_bytes()).hexdigest()
-        self.save_manifest()
-        self.assertNotEqual(initial, self.identity()['cache_key'])
-
-    def test_host_and_target_configuration_are_separate(self):
-        host = self.identity('host')
-        target = self.identity('target')
-        self.assertEqual(host['gn_args']['target_os'], 'linux')
-        self.assertEqual(host['gn_args']['target_cpu'], 'x64')
-        self.assertNotIn('arm_version', host['gn_args'])
-        self.assertEqual(target['gn_args']['target_os'], 'ctr')
-        self.assertEqual(target['gn_args']['target_cpu'], 'arm')
-        self.assertEqual(target['gn_args']['arm_version'], 6)
-        self.assertFalse(target['gn_args']['arm_use_neon'])
-        self.assertFalse(target['gn_args']['arm_use_integer_division'])
-        self.assertEqual(target['gn_args']['arm_float_abi'], 'hard')
-        self.assertNotEqual(host['cache_key'], target['cache_key'])
-
-    def test_precompiler_runs_on_linux_and_targets_ctr(self):
-        compiler = self.identity('precompiler')
-        self.assertEqual(compiler['executable_os'], 'linux')
-        self.assertEqual(compiler['executable_cpu'], 'x64')
-        self.assertEqual(compiler['gn_args']['target_os'], 'ctr')
-        self.assertEqual(compiler['gn_args']['dart_target_arch'], 'arm')
-        self.assertEqual(compiler['root_target'], '//build/ctr:precompiler')
-        self.assertEqual(self.identity('target', 'aot')['root_target'],
-                         '//build/ctr:aot_runtime')
-        self.assertEqual(self.identity('target', 'jit')['root_target'],
-                         '//build/ctr:jit_runtime')
-
-    def test_specs_content_changes_invalidate_identity(self):
-        profile = json.loads(self.profile.read_text())
-        profile['link_specs'] = ['ctr.specs']
-        self.profile.write_text(json.dumps(profile))
-        specs = self.base / 'ctr.specs'
-        specs.write_text('first specs')
-        initial = self.identity()['cache_key']
-        specs.write_text('changed specs')
-        self.assertNotEqual(initial, self.identity()['cache_key'])
-
-    def test_identical_inputs_in_another_directory_keep_identity(self):
-        profile = json.loads(self.profile.read_text())
-        profile['link_specs'] = ['ctr.specs']
-        self.profile.write_text(json.dumps(profile))
-        specs = self.base / 'ctr.specs'
-        specs.write_text('identical relative specs contents')
-        other = self.base / 'second-location'
-        other.mkdir()
-        for path in (self.manifest, self.profile, self.patch, specs):
-            shutil.copyfile(path, other / path.name)
-        result = run(sys.executable, ROOT / 'build_sdk.py', 'identity',
-                     '--manifest', other / self.manifest.name,
-                     '--profile', other / self.profile.name, '--component', 'target', '--mode', 'aot')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)['cache_key'], self.identity('target')['cache_key'])
-
     def test_pinned_patch_and_specs_bytes_survive_autocrlf_checkout(self):
         shutil.copyfile(ROOT.parent / '.gitattributes', self.upstream / '.gitattributes')
         manifest = json.loads((ROOT / 'versions.json').read_text())
         all_patches = manifest['patches'] + manifest['dependencies'].get('icu', {}).get('patches', [])
         files = [ROOT / patch['path'] for patch in all_patches] + [ROOT / name for name in
-            ('ctr.specs', 'versions.json', 'target-ctr.json', 'common.py', 'build_sdk.py')]
+            ('ctr.specs', 'versions.json', 'target-ctr.json')]
         for path in files:
             destination = self.upstream / 'toolchain' / path.relative_to(ROOT)
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -254,12 +195,57 @@ class ToolchainTest(unittest.TestCase):
             path = checkout / 'toolchain' / patch['path']
             self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), patch['sha256'])
         self.assertEqual((checkout / 'toolchain' / 'ctr.specs').read_bytes(), (ROOT / 'ctr.specs').read_bytes())
-        args = ['identity', '--component', 'target', '--mode', 'aot']
-        copied = run(sys.executable, checkout / 'toolchain' / 'build_sdk.py', *args)
-        original = run(sys.executable, ROOT / 'build_sdk.py', *args)
-        self.assertEqual(copied.returncode, 0, copied.stderr)
-        self.assertEqual(original.returncode, 0, original.stderr)
-        self.assertEqual(json.loads(copied.stdout)['cache_key'], json.loads(original.stdout)['cache_key'])
+
+
+class HostTest(unittest.TestCase):
+    def test_supported_hosts_select_their_gclient_and_gn_executables(self):
+        manifest = read_json(DEFAULT_MANIFEST)
+        for system, machine, name, gclient, gn in [
+                ('Linux', 'x86_64', 'linux-x64', 'gclient', 'gn'),
+                ('Windows', 'AMD64', 'windows-x64', 'gclient.bat', 'gn.exe'),
+                ('Darwin', 'x86_64', 'macos-x64', 'gclient', 'gn'),
+                ('Darwin', 'arm64', 'macos-arm64', 'gclient', 'gn')]:
+            with self.subTest(host=name):
+                host = bootstrap.current_host(manifest, system, machine)
+                self.assertEqual(host.name, name)
+                self.assertEqual(host.gclient, gclient)
+                self.assertEqual(host.gn, gn)
+                self.assertRegex(bootstrap.gn_pin(manifest, host)['binary_sha256'], r'^[0-9a-f]{64}$')
+
+    def test_unsupported_host_is_refused(self):
+        manifest = read_json(DEFAULT_MANIFEST)
+        for system, machine in [('Windows', 'arm64'), ('Linux', 'aarch64'), ('FreeBSD', 'amd64')]:
+            with self.subTest(system=system, machine=machine):
+                with self.assertRaisesRegex(RuntimeError, 'unsupported host'):
+                    bootstrap.current_host(manifest, system, machine)
+
+    def test_mismatched_gclient_is_preserved(self):
+        manifest = read_json(DEFAULT_MANIFEST)
+        with tempfile.TemporaryDirectory(prefix='bootstrap-test-') as temp:
+            source = Path(temp) / 'sdk'
+            config = Path(temp) / '.gclient'
+            config.write_text('owner configuration\n')
+            with self.assertRaisesRegex(RuntimeError, 'unmanaged or mismatched'):
+                bootstrap.write_gclient_config(source, manifest)
+            self.assertEqual(config.read_text(), 'owner configuration\n')
+            config.unlink()
+            bootstrap.write_gclient_config(source, manifest)
+            bootstrap.write_gclient_config(source, manifest)
+            self.assertEqual(config.read_text(), bootstrap.gclient_config(source, manifest))
+
+    def test_gn_archive_and_binary_are_both_verified(self):
+        data = b'unit-test bytes, not a compiler'
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as archive:
+            archive.writestr('gn', data)
+        archive = buffer.getvalue()
+        pin = dict(archive_sha256=hashlib.sha256(archive).hexdigest(),
+                   binary_sha256=hashlib.sha256(data).hexdigest())
+        self.assertEqual(bootstrap.checked_gn_bytes(archive, pin, 'gn'), data)
+        with self.assertRaisesRegex(RuntimeError, 'archive hash'):
+            bootstrap.checked_gn_bytes(archive + b'changed', pin, 'gn')
+        with self.assertRaisesRegex(RuntimeError, 'binary hash'):
+            bootstrap.checked_gn_bytes(archive, {**pin, 'binary_sha256': '0' * 64}, 'gn')
 
 
 @unittest.skipUnless(os.environ.get('CTR_SDK_INTEGRATION') == '1',

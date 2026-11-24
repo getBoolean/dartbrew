@@ -1,0 +1,21 @@
+temp:/dartbrew/tmp:true:true
+cwd:true
+write:hello:5
+append:hello world:11
+truncate:hello:5
+list:dir:files_fixture/tree/a
+list:dir:files_fixture/tree/a/b
+list:file:files_fixture/tree/a/b/two.txt
+list:file:files_fixture/tree/a/one.txt
+rename:1:false
+delete:false
+stat:notFound
+missing:PathNotFoundException
+link:Link is not supported on CTR (dart:io)
+watch:File system watching is not supported on this platform
+random:AMZ:11
+random:A1234M6789Z
+sdmc:same:true:/3ds/dartbrew_files_fixture.txt
+uri-base:true
+concurrent:40:true
+cleanup:false

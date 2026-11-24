@@ -31,7 +31,7 @@ class StageRunner {
   final Directory work;
   final ProcessStarter start;
   final IOSink progress;
-  final _commands = <Map<String, dynamic>>[];
+  final _commands = <Map<String, Object>>[];
 
   StageRunner(
     this.sdk,
@@ -45,9 +45,11 @@ class StageRunner {
     List<String> args,
     String stage, {
     String? cwd,
+    String? executable,
+    String? failureAdvice,
   }) async {
     progress.writeln(stage);
-    final executable = sdk.tool(tool);
+    executable ??= sdk.tool(tool);
     _commands.add({
       'stage': stage,
       'executable': executable,
@@ -60,7 +62,12 @@ class StageRunner {
       executable,
       args,
       workingDirectory: cwd ?? work.path,
-      environment: {'PATH': p.join(sdk.root, 'bin')},
+      environment: {
+        'PATH':
+            p.dirname(executable) +
+            (Platform.isWindows ? ';' : ':') +
+            p.join(sdk.root, 'bin'),
+      },
     );
     final log = File(p.join(work.path, '$stage.log')).openWrite();
     await Future.wait([
@@ -77,7 +84,8 @@ class StageRunner {
         executable,
         args,
         stage,
-        '$stage failed ($code); see ${p.join(work.path, '$stage.log')}',
+        '$stage failed ($code); see ${p.join(work.path, '$stage.log')}'
+        "${failureAdvice == null ? '' : '\n$failureAdvice'}",
         code,
       );
     }

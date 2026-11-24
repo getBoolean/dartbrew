@@ -8,135 +8,119 @@
   "patches": [
     {
       "path": "patches/dart/0001-ctr-toolchain.patch",
-      "sha256": "639ab0c46554c17a51b945111a41f023b90af92823ed656297677959d966c416"
+      "sha256": "0a3152f01ab8601c5be32fb0c6a48ffee76b85595225159a450bc1bb6dfa3c72"
     },
     {
-      "path": "patches/dart/0002-separate-runtime-graphs.patch",
-      "sha256": "79a37656d5834d617f79a0cae5e91d5803d436be80e7acd95ca549ec4868300f"
+      "path": "patches/dart/0002-ctr-armv6k.patch",
+      "sha256": "85375e8967a07fd490c5c4bc15fec33c1c07c64c9724139a6eda4e9f56d69ad4"
     },
     {
-      "path": "patches/dart/0003-ctr-armv6k.patch",
-      "sha256": "1c6814ab37ce56bb8a2f4e3256c08b01517e3e387ac55ae5ea48685ef8370f6f"
+      "path": "patches/dart/0003-ctr-os-concurrency.patch",
+      "sha256": "fdfea8cdfcd7fc915876d3d57906ac150c6fe33e9d7b753236b5f43ad15c38d0"
     },
     {
-      "path": "patches/dart/0004-ctr-os-concurrency.patch",
-      "sha256": "9d2fee5509f930c76daadc7672ea3316f7fea228c603c0e0da965f9bc1d4dda8"
+      "path": "patches/dart/0004-ctr-static-library-resolution.patch",
+      "sha256": "ee7c1df310e762df14239e32ea3e158ac3193ac99de597f378aa5403548b7f0b"
     },
     {
-      "path": "patches/dart/0005-ctr-thread-shutdown.patch",
-      "sha256": "8378c5c11dc8b9d33521b1a5ac4ddd17b6ba0f668ecba7947418880ffc2f5ca3"
+      "path": "patches/dart/0005-ctr-software-double.patch",
+      "sha256": "67b224405622b29a647722482b618686fbc40c94c8616bcd6373b0ca140cfbff"
     },
     {
-      "path": "patches/dart/0006-ctr-native-diagnostics.patch",
-      "sha256": "4ff97c9296d3da73447991710f08b7824951d301c4594c3cad157f5bc1679ad4"
+      "path": "patches/dart/0006-ctr-virtual-memory.patch",
+      "sha256": "851358e24989f0b650ca970d23a0aaad034b126c3b638da1fdf90175a4d82487"
     },
     {
-      "path": "patches/dart/0007-ctr-static-library-resolution.patch",
-      "sha256": "eeeebbc3913f5d60634f0f8ad3d505c05098d62dc9afa5e77335bf8da8486c3e"
+      "path": "patches/dart/0007-ctr-native-runtime-integration.patch",
+      "sha256": "51c940ca2e44457ab186b4b8378199b97b8d24cc401f1e9cbf327afca6e3638f"
     },
     {
-      "path": "patches/dart/0008-ctr-software-double.patch",
-      "sha256": "870f8de08737981e2863e83b2600a4a97db1974bcaaf35509cd4cbd5f5ae87eb"
+      "path": "patches/dart/0008-ctr-decimal-semantics.patch",
+      "sha256": "3e76fab9656cbdcbf745fae0f58abaf4a328eca6708a8405c3b3e176ccd22c09"
     },
     {
-      "path": "patches/dart/0009-ctr-virtual-memory.patch",
-      "sha256": "b02f268617a639d127dacddc52b0858cbef1034608a8eb9f1fc779038c7bd6bb"
+      "path": "patches/dart/0009-ctr-embedder-hooks.patch",
+      "sha256": "3baf7edaba0b501c089bbf26c787c061b5db5476bab401329aac479bb2782bb6"
     },
     {
-      "path": "patches/dart/0010-ctr-native-runtime-integration.patch",
-      "sha256": "4ab183a028fb5023fa9a43ab7f145f53c02b171b6f3659992607e796f5a413b4"
+      "path": "patches/dart/0010-host-shared-library-link.patch",
+      "sha256": "c6ec97dd62656da37d45540c82b0e4a667a723562432ffd7c3a000917f225ef1"
     },
     {
-      "path": "patches/dart/0011-ctr-decimal-semantics.patch",
-      "sha256": "7db6c93293b1e1e8dac7b893babec3bf1918e606f5ec38ee6ece8aef5c473882"
+      "path": "patches/dart/0011-profiler-link-guards.patch",
+      "sha256": "0a6538daa407ceb1b3518bda8fe4111ff308910ca5d16d4971f4e5db9646dfcd"
     },
     {
-      "path": "patches/dart/0012-ctr-embedder-async.patch",
-      "sha256": "3a394426a82be42dbe5d81f70c6044bf8b85665f0040f888130a17e1d85f264e"
+      "path": "patches/dart/0012-ctr-native-symbols.patch",
+      "sha256": "c6d22022b9eeb0669a1a17afd3f36037b2522c1ddf5973ac5784d5092066cecb"
     },
     {
-      "path": "patches/dart/0013-runtime-entry-offsets.patch",
-      "sha256": "1a1cb40c0840f2c7670b9bd4dee7dc0d335c1ff34fd47a47bf12eef09018e785"
+      "path": "patches/dart/0013-ctr-libc-tls-contracts.patch",
+      "sha256": "246cdf9d0ed0386c9270a615366b7ab8a6bf078dfea08bc0804f091d528f1a1f"
     },
     {
-      "path": "patches/dart/0014-host-shared-library-link.patch",
-      "sha256": "315047a0086b49e29b768eb92d523a182b626592a791ed58778c6a5f5d903535"
+      "path": "patches/dart/0014-ctr-aot-image-assembly.patch",
+      "sha256": "1204b2a1200263cad367811d8c81b81e84355ad36c08caf7a311d9d58b2e488f"
     },
     {
-      "path": "patches/dart/0015-profiler-link-guards.patch",
-      "sha256": "3fa0aa68f547401857cae33a3c15714b2da9588aaa6a3540ae8e19ae8564a9d2"
+      "path": "patches/dart/0015-ctr-profiler-guards.patch",
+      "sha256": "a8771a625a86c0d532d231baca6b7ba71c0a2f6993617541e8a28cb92181a58e"
     },
     {
-      "path": "patches/dart/0016-ctr-native-symbols.patch",
-      "sha256": "9b7b0b61ce3e1ad6a0aef7d9ac4408cc1d03ff401f3c8c542f6026189d214c36"
+      "path": "patches/dart/0016-ctr-double-comparisons.patch",
+      "sha256": "970de1716a4d59fed16af843c323a75a14b2d452a3ff3ed0e8d0ffc778661f95"
     },
     {
-      "path": "patches/dart/0017-ctr-libc-tls-contracts.patch",
-      "sha256": "fb7ab103921cca0ad84bd97c6d0732718f618d0e71628baf2ae50391960a2b53"
+      "path": "patches/dart/0017-ctr-double-minmax.patch",
+      "sha256": "abea3b3df0adc53ec58c31ebe148998848643a463b7204f07cfe4f79b383241c"
     },
     {
-      "path": "patches/dart/0018-ctr-aot-image-assembly.patch",
-      "sha256": "7306093fed42b2e6ec129137a59f04064621089d682b7582e46f741dc4a522f4"
+      "path": "patches/dart/0018-ctr-float-conversions.patch",
+      "sha256": "c65a5b05cad4a701dd3db033ee514c34d4aae468a1a99ff9e56d931d9211047a"
     },
     {
-      "path": "patches/dart/0019-ctr-source-report-profiler.patch",
-      "sha256": "71dac4d624f5eb2204aaa4cfec452586c605249857b8b80181f4635057df6622"
+      "path": "patches/dart/0019-ctr-software-sqrt.patch",
+      "sha256": "09781bcc2e988fcdf770d67134b99b06c344e8b3f8e49b7573fa57fad5c45b9e"
     },
     {
-      "path": "patches/dart/0020-ctr-profiler-types.patch",
-      "sha256": "b9a92f165a2cc4403cd31cd7366091d1aca2472ff763180945ba264a88cad5fd"
+      "path": "patches/dart/0020-ctr-native-offsets.patch",
+      "sha256": "ebb87d0de6f3ed0434c99f1d1f062ad65e6ac3ffd118c139b7f6ea200514d723"
     },
     {
-      "path": "patches/dart/0021-ctr-double-comparisons.patch",
-      "sha256": "97532f322e80b5129b0137482d47945d7c2b94c90cf9ca6820548370a21a915b"
+      "path": "patches/dart/0021-ctr-power-shortcuts.patch",
+      "sha256": "609a18e766392ccad43a7cc1aee62a9bb165c90970a74f5805970c81c29c5903"
     },
     {
-      "path": "patches/dart/0022-ctr-double-minmax.patch",
-      "sha256": "b9a3f9007b539d778358e1581a7d51c4b4f73a2078521127267c0c2fd0a51e91"
+      "path": "patches/dart/0022-ctr-software-remainder.patch",
+      "sha256": "56a7af1d4850f06905dc9781fce88dd875cc3638cca0f767f0868ab242cd7e02"
     },
     {
-      "path": "patches/dart/0023-ctr-float-conversions.patch",
-      "sha256": "c7c7d0be04b04e087962eb26fafdea7a5e83e6ef2eb95f7787f1d3497888da1f"
+      "path": "patches/dart/0023-ctr-software-libm.patch",
+      "sha256": "c281be46010b5e9d5708be1f1c3902b1c61745921dbedd0533cd926b6daa869a"
     },
     {
-      "path": "patches/dart/0024-float-entry-offsets.patch",
-      "sha256": "51615de7cb8478ca0ffc41723f81352cc0f73f798b37ed5ae69adf3db321f83a"
+      "path": "patches/dart/0024-ctr-memory-region-protection.patch",
+      "sha256": "6ecb7cbbd14fe04d517903d34b3c0081bc74e8ed18dfca9f170385dab6142ade"
     },
     {
-      "path": "patches/dart/0025-ctr-software-sqrt.patch",
-      "sha256": "03870d0c9264c78596b41d94aa9d81254606bc4ab5aeac9c9dab5946cb586dc7"
+      "path": "patches/dart/0025-ctr-global-worker-budget.patch",
+      "sha256": "a2cfc2e7252f82112aba4d581c8fe7e4a9dece5a2fa36c20c90cd58752f6b4a2"
     },
     {
-      "path": "patches/dart/0026-sqrt-entry-offsets.patch",
-      "sha256": "59e001e952e2b7919a3798057be980cb0774e6aba72d040ed324c3074dc921ed"
+      "path": "patches/dart/0026-ctr-io-port.patch",
+      "sha256": "9c4558df5f9126dfdd8726a93386027d28389d1912cd30aa302acb7bcaf500f1"
     },
     {
-      "path": "patches/dart/0027-ctr-power-shortcuts.patch",
-      "sha256": "265f1af2671099949376e72e9f6d75aaf904ed8e0918a79fac656d387d5ec2b2"
+      "path": "patches/dart/0027-ctr-eventhandler.patch",
+      "sha256": "cb47eb0a0976bbd35ef343ea6410fedc7903e4bfe62396bad800b8ec89cfe65a"
     },
     {
-      "path": "patches/dart/0028-ctr-software-remainder.patch",
-      "sha256": "e435e0d4ad7265cebf828c2367a6080709b6a325f6131a0c7d5c8271d6166978"
+      "path": "patches/dart/0028-ctr-files.patch",
+      "sha256": "9a8925a780a35195e7360122737f122ab7f4c9be537056135a71789c8a3fa6e4"
     },
     {
-      "path": "patches/dart/0029-ctr-software-libm.patch",
-      "sha256": "952e5e81f914efff07f2dbe02bacd9d4cfb0b94215be18b199be69a1604987db"
-    },
-    {
-      "path": "patches/dart/0030-ctr-memory-restoration.patch",
-      "sha256": "bc9b0618a540b3c5e52a83fb5e910027bde39195ad99300ec9b2b142162b1f28"
-    },
-    {
-      "path": "patches/dart/0031-ctr-memory-region-protection.patch",
-      "sha256": "9ac4f3b3d2f5c9aeb54b49a58033572b4a69c2cb8a389bb3314da9226cd84099"
-    },
-    {
-      "path": "patches/dart/0032-ctr-global-worker-budget.patch",
-      "sha256": "e18a0c17892848fad8704577bf09657eeea5ac75e354a5c597e2d8734cba811e"
-    },
-    {
-      "path": "patches/dart/0033-ctr-uri-base.patch",
-      "sha256": "dc57e6aba9f229e4a8cd0732ab6d82cdb7b719f0cbc6f97d51c1cc8fb74522eb"
+      "path": "patches/dart/0029-ctr-platform-stdio.patch",
+      "sha256": "9cb83a3f9dfe713b86d5d1f842e251b0ef369fd63bcf12613aa01cdb8d768c17"
     }
   ],
   "dependencies": {
@@ -149,10 +133,29 @@
       "sha256": "d51a35c1d649af503d14ad1617f34473efd50b0991228387a7c42444ccef9303"
     },
     "gn": {
-      "package": "gn/gn/linux-amd64",
       "revision": "git_revision:510ec7992c30f172205792f190e96111a896ba8f",
-      "archive_sha256": "402646b59942320614e10669ef063de3851f234a89e7d95cd4b4b3b2a110d709",
-      "binary_sha256": "520e5777cefd31f3202cd65cc4ddd68fcc7edbcd55ec10c5254ff44ba767d809"
+      "hosts": {
+        "linux-x64": {
+          "package": "gn/gn/linux-amd64",
+          "archive_sha256": "402646b59942320614e10669ef063de3851f234a89e7d95cd4b4b3b2a110d709",
+          "binary_sha256": "520e5777cefd31f3202cd65cc4ddd68fcc7edbcd55ec10c5254ff44ba767d809"
+        },
+        "windows-x64": {
+          "package": "gn/gn/windows-amd64",
+          "archive_sha256": "174d11dc7bc18bf7cbcb1bc79571905afd2740ae9bc531b63818a9e89c59c9be",
+          "binary_sha256": "e98db2df9cc672d49db57fe0f70515800c82156216ec5d2a3c8c59d7defcbccb"
+        },
+        "macos-x64": {
+          "package": "gn/gn/mac-amd64",
+          "archive_sha256": "dfa7d1aeba11768c96880c6603b5b13adbd6d620107d418f7bc72f15825955a6",
+          "binary_sha256": "f99a46eabce062a0ec79257d73fbc2e025b40d814220bb8aaf675322a6de59d3"
+        },
+        "macos-arm64": {
+          "package": "gn/gn/mac-arm64",
+          "archive_sha256": "a6de52657f3d01a073b00aa91db512f85d3ae9d2b2c0ad46949cda4e8204f62a",
+          "binary_sha256": "8b50f57cfac9eba62f07ce5d9ad15d738c6bfeb6e58de33fe2b586800545bee6"
+        }
+      }
     },
     "clang": "git_revision:3493720eca95cf844a8d7e58fdd12e0e5644e7d0",
     "ninja": "version:3@1.13.2.chromium.4",

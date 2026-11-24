@@ -1,4 +1,5 @@
-import 'package:dartbrew/src/device/stream.dart';
+import 'run_identity.dart';
+import 'stream.dart';
 
 /// What the app reported about a run.
 enum Outcome { pass, fail, incomplete }
@@ -16,6 +17,7 @@ final class Verdict {
     this.reason,
     this.output, {
     this.noTerminal = false,
+    this.exitCode,
   });
 
   final Outcome outcome;
@@ -30,32 +32,23 @@ final class Verdict {
   /// Whether the journal ended without a complete begin, cleanup and terminal
   /// sequence, so the stream's end decides what to tell the user.
   final bool noTerminal;
+
+  /// The code the program ended with through `exit` or a nonzero `exitCode`,
+  /// from the terminal record's `exit_code`; null when it carried none.
+  final int? exitCode;
 }
 
 /// The launcher contract schemas a `begin` record may carry.
 const supportedSchemas = [1, 2];
 
-const _identityKeys = [
-  'schema',
-  'run_id',
-  'fixture',
-  'mode',
-  'compatibility',
-  'artifact_sha256',
-  'build_id',
-  'environment',
-];
-
 /// Computes the verdict of one run from its records, as they arrive.
 ///
-/// This mirrors `runtime/ctr/results.py`; both read
-/// `runtime/ctr/test/verdict_vectors.json`. After the first rule violation
-/// later records are ignored.
+/// After the first rule violation later records are ignored.
 final class VerdictAccumulator {
-  /// [expected] is the identity of the run the host started (`run.json`).
+  /// [expected] is the identity of the run the host started.
   VerdictAccumulator(this.expected);
 
-  final Map<String, Object?> expected;
+  final RunIdentity expected;
   final _output = <String>[];
   var _active = false;
   String? _cleanup;
@@ -83,14 +76,14 @@ final class VerdictAccumulator {
       return null;
     }
     final record = line.fields;
-    if (record['run_id'] != expected['run_id']) {
+    if (record['run_id'] != expected.runId) {
       if (_active) throw const _Violation('interleaved run');
       return null;
     }
     if (_terminal != null) throw const _Violation('record after terminal');
     final event = record['event'];
     if (event == 'begin') {
-      if (_active || _identityKeys.any((k) => record[k] != expected[k])) {
+      if (_active || !expected.matchesBegin(record)) {
         throw const _Violation('duplicate begin or identity mismatch');
       }
       if (!supportedSchemas.contains(record['schema'])) {
@@ -133,12 +126,18 @@ final class VerdictAccumulator {
         noTerminal: problem.noTerminal,
       );
     }
-    final outcome = switch (_terminal!['outcome']) {
+    final terminal = _terminal!;
+    final outcome = switch (terminal['outcome']) {
       'pass' => Outcome.pass,
       'fail' => Outcome.fail,
       _ => Outcome.incomplete,
     };
-    return Verdict(outcome, null, output);
+    return Verdict(
+      outcome,
+      null,
+      output,
+      exitCode: terminal['exit_code'] as int?,
+    );
   }
 
   ({String reason, bool noTerminal})? _finalProblem(Observation? observation) {
@@ -150,8 +149,17 @@ final class VerdictAccumulator {
       return (reason: 'missing begin, cleanup or terminal', noTerminal: true);
     }
     final outcome = terminal['outcome'];
+    // exit(n) and a nonzero exitCode end the run with exit_code: 0 passes,
+    // any other code fails carrying it.
+    final exitCode = terminal['exit_code'];
+    if (terminal.containsKey('exit_code') && exitCode is! int) {
+      return (reason: 'invalid exit code', noTerminal: false);
+    }
     if (!const ['pass', 'fail', 'incomplete'].contains(outcome) ||
-        (_cleanup == 'fail' && outcome != 'fail')) {
+        (_cleanup == 'fail' && outcome != 'fail') ||
+        (exitCode != null &&
+            (outcome == 'incomplete' ||
+                (outcome == 'pass' && exitCode != 0)))) {
       return (reason: 'contradictory outcome', noTerminal: false);
     }
     if (observation == Observation.crash) {
@@ -191,7 +199,10 @@ RunExit exitFor(Verdict verdict, StreamEnd end, {int? port}) {
     case Outcome.pass:
       return const RunExit(0);
     case Outcome.fail:
-      return const RunExit(255);
+      // The program's own exit code when a process can exit with it (1-255),
+      // or 255 for any other failure.
+      final code = verdict.exitCode;
+      return RunExit(code != null && code >= 1 && code <= 255 ? code : 255);
     case Outcome.incomplete:
       if (verdict.noTerminal) {
         return RunExit(1, switch (end) {

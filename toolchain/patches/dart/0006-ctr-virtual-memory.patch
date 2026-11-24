@@ -1,0 +1,256 @@
+Back VM page reservations with CTR memory regions.
+
+diff --git a/runtime/vm/cpu_arm.cc b/runtime/vm/cpu_arm.cc
+index d6242280..f623917c 100644
+--- a/runtime/vm/cpu_arm.cc
++++ b/runtime/vm/cpu_arm.cc
+@@ -9,6 +9,9 @@
+ #include "vm/cpu_arm.h"
+ 
+ #include "vm/cpuinfo.h"
++#if defined(DART_HOST_OS_CTR)
++#include "vm/cpu_cache_ctr.h"
++#endif
+ 
+ #if !defined(TARGET_HOST_MISMATCH)
+ #if defined(DART_HOST_OS_MACOS) || defined(DART_HOST_OS_IOS)
+@@ -79,7 +82,9 @@ void CPU::FlushICache(uword start, uword size) {
+ // On iOS we use sys_icache_invalidate from Darwin. See:
+ //
+ // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/sys_icache_invalidate.3.html
+-#if defined(DART_HOST_OS_IOS)
++#if defined(DART_HOST_OS_CTR)
++  CtrFlushICache(start, size);
++#elif defined(DART_HOST_OS_IOS)
+   sys_icache_invalidate(reinterpret_cast<void*>(start), size);
+ #elif defined(DART_HOST_OS_LINUX)
+   char* beg = reinterpret_cast<char*>(start);
+diff --git a/runtime/vm/cpu_cache_ctr.cc b/runtime/vm/cpu_cache_ctr.cc
+new file mode 100644
+index 00000000..5b63ff94
+--- /dev/null
++++ b/runtime/vm/cpu_cache_ctr.cc
+@@ -0,0 +1,55 @@
++// Copyright (c) 2026, the Dart project authors. Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++#include "vm/globals.h"
++#if defined(DART_HOST_OS_CTR)
++#include "vm/cpu_cache_ctr.h"
++#include "platform/assert.h"
++#include <3ds.h>
++
++// The custom backdoor's callback runs privileged, on the calling core. The
++// callback returns zero in r0 only after completing cache maintenance. Keep the
++// SVC wrapper's stack 8-byte aligned and preserve the caller's return address.
++extern "C" int32_t DartCtrFlushEntireCache();
++#if defined(__arm__)
++asm(".pushsection .text\n"
++    ".arm\n"
++    ".balign 4\n"
++    ".global DartCtrFlushEntireCache\n"
++    ".type DartCtrFlushEntireCache, %function\n"
++    "DartCtrFlushEntireCache:\n"
++    "push {r4, lr}\n"
++    "adr r0, .Ldart_ctr_cache_kernel\n"
++    "svc 0x80\n"
++    "pop {r4, pc}\n"
++    ".size DartCtrFlushEntireCache, .-DartCtrFlushEntireCache\n"
++    ".Ldart_ctr_cache_kernel:\n"
++    "mrs r3, cpsr\n"
++    "cpsid aif\n"
++    "mov r0, #0\n"
++    "mcr p15, 0, r0, c7, c10, 0\n"  // clean D-cache
++    "mcr p15, 0, r0, c7, c10, 4\n"  // drain write buffer
++    "mcr p15, 0, r0, c7, c5, 0\n"   // invalidate I-cache/branch targets
++    "mcr p15, 0, r0, c7, c5, 4\n"   // prefetch flush
++    "msr cpsr_c, r3\n"
++    "bx lr\n"
++    ".popsection\n");
++#endif
++
++namespace dart {
++void CtrFlushICache(uword start, uword size) {
++  if (size == 0) return;
++  s64 version = 0;
++  const Result detected = svcGetSystemInfo(&version, 0x10000, 0);
++  if (R_FAILED(detected) || version == 0) {
++    FATAL("CTR instruction cache maintenance needs Luma custom SVC 0x80: 0x%08x",
++          static_cast<unsigned int>(detected));
++  }
++  const Result result = DartCtrFlushEntireCache();
++  if (R_FAILED(result)) {
++    FATAL("CTR instruction cache publication failed: address=%p result=0x%08x",
++          reinterpret_cast<void*>(start), static_cast<unsigned int>(result));
++  }
++}
++}  // namespace dart
++#endif  // defined(DART_HOST_OS_CTR)
+diff --git a/runtime/vm/cpu_cache_ctr.h b/runtime/vm/cpu_cache_ctr.h
+new file mode 100644
+index 00000000..3c0b293f
+--- /dev/null
++++ b/runtime/vm/cpu_cache_ctr.h
+@@ -0,0 +1,13 @@
++// Copyright (c) 2026, the Dart project authors. Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++#ifndef RUNTIME_VM_CPU_CACHE_CTR_H_
++#define RUNTIME_VM_CPU_CACHE_CTR_H_
++
++#include "vm/globals.h"
++
++namespace dart {
++void CtrFlushICache(uword start, uword size);
++}  // namespace dart
++
++#endif  // RUNTIME_VM_CPU_CACHE_CTR_H_
+diff --git a/runtime/vm/virtual_memory_ctr.cc b/runtime/vm/virtual_memory_ctr.cc
+new file mode 100755
+index 00000000..cf60a1e8
+--- /dev/null
++++ b/runtime/vm/virtual_memory_ctr.cc
+@@ -0,0 +1,122 @@
++// Copyright (c) 2026, the Dart project authors. Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "vm/globals.h"
++#if defined(DART_HOST_OS_CTR)
++#include "vm/virtual_memory.h"
++#include "vm/cpu_cache_ctr.h"
++
++#include <3ds.h>
++#include <malloc.h>
++#include <string.h>
++
++namespace dart {
++
++DECLARE_FLAG(bool, write_protect_code);
++uword VirtualMemory::page_size_ = 0;
++
++intptr_t VirtualMemory::CalculatePageSize() { return 0x1000; }
++
++void VirtualMemory::Init() { page_size_ = CalculatePageSize(); }
++
++void VirtualMemory::Cleanup() { page_size_ = 0; }
++
++VirtualMemory* VirtualMemory::AllocateAligned(intptr_t size,
++                                             intptr_t alignment,
++                                             bool is_executable,
++                                             const char* name) {
++  ASSERT(Utils::IsAligned(size, PageSize()));
++  ASSERT(Utils::IsPowerOfTwo(alignment));
++  ASSERT(Utils::IsAligned(alignment, PageSize()));
++  if (size <= 0 || size > kIntptrMax - (alignment - PageSize())) {
++    return nullptr;
++  }
++  // Keep libc's allocation intact: its heap owns the mappings. In particular,
++  // never MEMOP_FREE an aligned interior or a truncated tail of this block.
++  const intptr_t allocated_size = size + alignment - PageSize();
++  void* allocation = memalign(PageSize(), allocated_size);
++  if (allocation == nullptr) return nullptr;
++  const uword aligned = Utils::RoundUp(reinterpret_cast<uword>(allocation),
++                                       alignment);
++  void* address = reinterpret_cast<void*>(aligned);
++  memset(address, 0, size);
++  MemoryRegion region(address, size);
++  MemoryRegion reserved(allocation, allocated_size);
++  if (is_executable && ExecutesGeneratedCode() && !FLAG_write_protect_code) {
++    Protect(address, size, kReadWriteExecute);
++  }
++  return new VirtualMemory(region, reserved);
++}
++
++VirtualMemory::~VirtualMemory() {
++  if (vm_owns_region()) {
++    // Restore all owned pages, including a protected/truncated tail, before
++    // libc can touch or reuse this allocation. Images never enter this path.
++    Protect(reserved_.pointer(), reserved_.size(), kReadWrite);
++    free(reserved_.pointer());
++  }
++}
++
++bool VirtualMemory::FreeSubSegment(void* address, intptr_t size) {
++  // Truncate may shrink the visible region, but libc cannot release interiors.
++  // Returning false preserves the original reservation for the destructor.
++  return false;
++}
++
++void VirtualMemory::Protect(void* address, intptr_t size, Protection mode) {
++  if (size == 0) return;
++  const uword start = reinterpret_cast<uword>(address);
++  const uword page = Utils::RoundDown(start, PageSize());
++  const uword end = Utils::RoundUp(start + size, PageSize());
++  const u32 length = static_cast<u32>(end - page);
++  u32 permissions = 0;
++  switch (mode) {
++    case kNoAccess: break;
++    case kReadOnly: permissions = MEMPERM_READ; break;
++    case kReadWrite: permissions = MEMPERM_READWRITE; break;
++    case kReadExecute: permissions = MEMPERM_READ | MEMPERM_EXECUTE; break;
++    case kReadWriteExecute:
++      permissions = MEMPERM_READWRITE | MEMPERM_EXECUTE;
++      break;
++  }
++  Result result;
++  if ((permissions & MEMPERM_EXECUTE) != 0) {
++    // VM callback trampolines copy bytes then call WriteProtectCode directly;
++    // they do not pass through CPU::FlushICache at Code::FinalizeCode.
++    CtrFlushICache(page, length);
++    // This SVC rejects the pseudo handle. A denied duplicate or permission
++    // change must terminate publication, never let the caller execute anyway.
++    Handle process = 0;
++    result = svcDuplicateHandle(&process, CUR_PROCESS_HANDLE);
++    if (R_FAILED(result)) {
++      FATAL("CTR duplicate process handle failed: 0x%08x",
++            static_cast<unsigned int>(result));
++    }
++    result = svcControlProcessMemory(process, static_cast<u32>(page), 0,
++                                     length, MEMOP_PROT, permissions);
++    const Result closed = svcCloseHandle(process);
++    if (R_FAILED(closed)) {
++      FATAL("CTR close process handle failed: 0x%08x",
++            static_cast<unsigned int>(closed));
++    }
++  } else {
++    u32 out = 0;
++    result = svcControlMemory(&out, static_cast<u32>(page), 0, length,
++                              MEMOP_PROT, static_cast<MemPerm>(permissions));
++  }
++  if (R_FAILED(result)) {
++    FATAL("CTR memory protection failed: address=%p size=0x%x mode=%u result=0x%08x",
++          reinterpret_cast<void*>(page), static_cast<unsigned int>(length),
++          static_cast<unsigned int>(permissions), static_cast<unsigned int>(result));
++  }
++}
++
++void VirtualMemory::DontNeed(void* address, intptr_t size) {
++  // Optional reclamation hint (sweeper and snapshot readers). CTR libc offers
++  // no page-discard operation for live allocations; retain contents/ownership.
++  // This is not used for mandatory permission changes or code publication.
++}
++
++}  // namespace dart
++#endif  // defined(DART_HOST_OS_CTR)
+diff --git a/runtime/vm/vm_sources.gni b/runtime/vm/vm_sources.gni
+index 8bd60fd6..b343117f 100644
+--- a/runtime/vm/vm_sources.gni
++++ b/runtime/vm/vm_sources.gni
+@@ -66,6 +66,8 @@ vm_sources = [
+   "constants_x64.h",
+   "cpu.h",
+   "cpu_arm.cc",
++  "cpu_cache_ctr.cc",
++  "cpu_cache_ctr.h",
+   "cpu_arm64.cc",
+   "cpu_ia32.cc",
+   "cpu_riscv.cc",
+@@ -380,6 +382,7 @@ vm_sources = [
+   "virtual_memory.h",
+   "virtual_memory_compressed.cc",
+   "virtual_memory_compressed.h",
++  "virtual_memory_ctr.cc",
+   "virtual_memory_fuchsia.cc",
+   "virtual_memory_posix.cc",
+   "virtual_memory_win.cc",

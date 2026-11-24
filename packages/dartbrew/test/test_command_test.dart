@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
@@ -6,6 +8,7 @@ import 'package:dartbrew/src/commands/test.dart';
 import 'package:dartbrew/src/device/device.dart';
 import 'package:dartbrew/src/process.dart';
 import 'package:dartbrew/src/stage_runner.dart';
+import 'package:dartbrew/src/targets/ctr/azahar.dart';
 import 'package:dartbrew/src/targets/ctr/netloader.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
@@ -20,6 +23,41 @@ const _deadlines = RunDeadlines(
 );
 
 typedef _Result = ({int? code, String out, String err, String project});
+
+/// A stage that exits on cancellation or reports a natural failure after a
+/// short deadline, so a missed interrupt does not hang the regression test.
+class _WaitingStage implements Process {
+  final _exit = Completer<int>();
+  late final Timer _deadline;
+  bool killed = false;
+
+  _WaitingStage() {
+    _deadline = Timer(
+      const Duration(milliseconds: 300),
+      () => _exit.complete(42),
+    );
+  }
+
+  @override
+  Future<int> get exitCode => _exit.future;
+
+  @override
+  bool kill([ProcessSignal signal = ProcessSignal.sigterm]) {
+    if (_exit.isCompleted) return false;
+    killed = true;
+    _deadline.cancel();
+    _exit.complete(1);
+    return true;
+  }
+
+  @override
+  Stream<List<int>> get stdout => const Stream.empty();
+  @override
+  Stream<List<int>> get stderr => Stream.value(utf8.encode('stage diagnostic'));
+  @override
+  Never noSuchMethod(Invocation invocation) =>
+      super.noSuchMethod(invocation) as Never;
+}
 
 String _project(Map<String, String> files) {
   final root = Directory.systemTemp.createTempSync('dartbrew-test-');
@@ -65,13 +103,17 @@ Future<_Result> _test(
   String project,
   List<String> args, {
   FakeConsole? console,
+  AzaharHost? azaharHost,
   ProcessStarter start = startBuildStub,
   String command = 'test',
+  StringBuffer? out,
+  Stream<Object?> Function()? interrupts,
+  Future<void> Function(int exitCode)? exitProcess,
 }) async {
   final sdk = ctrBuildSdk();
-  final out = StringBuffer();
+  out ??= StringBuffer();
   final err = StringBuffer();
-  NetloaderClient transport(_) => NetloaderClient(
+  NetloaderClient transport() => NetloaderClient(
     port: console?.port ?? 1,
     receiveAddress: InternetAddress.loopbackIPv4,
     broadcastAddress: InternetAddress.loopbackIPv4,
@@ -80,18 +122,23 @@ Future<_Result> _test(
   final runner = CommandRunner<int>('dartbrew', '')
     ..addCommand(
       testCommand(
+        environment: sdk.environment,
         start: start,
-        transportFor: transport,
+        transport: transport,
         listenAddress: InternetAddress.loopbackIPv4,
         deadlines: _deadlines,
+        azaharHost: azaharHost,
+        interrupts: interrupts,
+        exitProcess: exitProcess ?? (_) => fail('exitProcess called'),
         out: out,
         err: err,
       ),
     )
     ..addCommand(
       runCommand(
+        environment: sdk.environment,
         start: start,
-        transportFor: transport,
+        transport: transport,
         listenAddress: InternetAddress.loopbackIPv4,
         deadlines: _deadlines,
         out: out,
@@ -182,16 +229,37 @@ void main() {
     expect(source, isNot(contains('helper.dart')));
   });
 
-  test('AE3: one pure test and one file read report file I/O as '
+  test('AE3: one pure test and one socket connect report sockets as '
       'unsupported, 1 passed 1 failed, exit 1', () async {
-    final project = _project({'test/io_test.dart': _testFile});
-    final console = await _console(RecordedStream.fileIo());
+    final project = _project({'test/net_test.dart': _testFile});
+    final console = await _console(RecordedStream.unsupportedSocket());
     final r = await _test(project, [], console: console);
 
     expect(r.code, 1);
-    expect(r.out, contains('io_test.dart: reads a file [E]'));
-    expect(r.out, contains('file I/O is not supported on CTR'));
+    expect(r.out, contains('net_test.dart: connects [E]'));
+    expect(r.out, contains('sockets is not supported on CTR'));
     expect(r.out, endsWith('+1 -1: Some tests failed.\n'));
+  });
+
+  test('a test program that calls exit(3) after its tests makes test exit '
+      '3 and says so', () async {
+    final project = _project({'test/a_test.dart': _testFile});
+    final stream = RecordedStream.passing(1);
+    final console = await FakeConsole.start(
+      script: (app) async {
+        app.begin();
+        stream.lines.forEach(app.output);
+        app
+          ..cleanup('pass')
+          ..terminal('fail', exitCode: 3);
+        await app.close();
+      },
+    );
+    addTearDown(console.close);
+    final r = await _test(project, [], console: console);
+
+    expect(r.code, 3);
+    expect(r.out, contains('exit code 3'));
   });
 
   test('a run that stops without done fails the unfinished tests', () async {
@@ -248,6 +316,292 @@ void main() {
     );
     expect(lines[1], startsWith('{"type":"allSuites","count":1'));
     expect(lines.last, startsWith('{"type":"done","success":true'));
+  });
+
+  group('--reporter json ends with done', () {
+    Map<String, Object?> lastEvent(String out) =>
+        jsonDecode(const LineSplitter().convert(out).last)
+            as Map<String, Object?>;
+
+    test('when a test fails', () async {
+      final project = _project({'test/net_test.dart': _testFile});
+      final console = await _console(RecordedStream.unsupportedSocket());
+      final r = await _test(project, ['-r', 'json'], console: console);
+
+      expect(r.code, 1);
+      expect(lastEvent(r.out), containsPair('type', 'done'));
+      expect(lastEvent(r.out), containsPair('success', false));
+    });
+
+    test('when the device drops mid-run', () async {
+      final project = _project({'test/a_test.dart': _testFile});
+      final stream = RecordedStream();
+      final suite = stream.suite('test/a_test.dart');
+      stream
+        ..plan(suite, ['one', 'two'])
+        ..start(suite, 'one');
+      final console = await FakeConsole.start(
+        script: (app) async {
+          app.begin();
+          stream.lines.forEach(app.output);
+          await app.close();
+        },
+      );
+      addTearDown(console.close);
+      final r = await _test(project, ['-r', 'json'], console: console);
+
+      expect(r.code, 1);
+      expect(lastEvent(r.out), containsPair('type', 'done'));
+      expect(lastEvent(r.out), containsPair('success', false));
+    });
+
+    test(
+      'when the app cannot be sent, keeping the message and exit code',
+      () async {
+        final project = _project({'test/a_test.dart': _testFile});
+        final r = await _test(project, ['-r', 'json']);
+
+        expect(r.code, 1);
+        expect(r.err, contains('Could not connect to the netloader'));
+        expect(lastEvent(r.out), {
+          'type': 'done',
+          'success': false,
+          'time': isA<int>(),
+        });
+      },
+    );
+
+    test('when the build fails', () async {
+      final project = _project({'test/a_test.dart': _testFile});
+      final out = StringBuffer();
+      await expectLater(
+        _test(
+          project,
+          ['-r', 'json'],
+          start: _failingKernelFor('dartbrew_test.dart'),
+          out: out,
+        ),
+        throwsA(isA<StageFailure>()),
+      );
+      expect(lastEvent('$out'), containsPair('type', 'done'));
+      expect(lastEvent('$out'), containsPair('success', false));
+    });
+
+    for (final stage in ['packages', 'link']) {
+      test(
+        'interrupt during $stage startup reaps child before reporter exits',
+        () async {
+          final project = _project({'test/a_test.dart': _testFile});
+          final interrupts = StreamController<Object?>(sync: true);
+          addTearDown(interrupts.close);
+          late _WaitingStage child;
+          final exit = Completer<(int, bool)>();
+          final result = await _test(
+            project,
+            ['-r', 'json'],
+            interrupts: () => interrupts.stream,
+            exitProcess: (code) async => exit.complete((code, child.killed)),
+            start:
+                (
+                  exe,
+                  args, {
+                  workingDirectory,
+                  environment,
+                  mode = ProcessStartMode.normal,
+                }) async {
+                  final selected = stage == 'packages'
+                      ? args.isNotEmpty && args.first == 'pub'
+                      : args.contains('--gc-sections');
+                  if (selected) {
+                    child = _WaitingStage();
+                    interrupts.add(null);
+                    await Future<void>.delayed(Duration.zero);
+                    return child;
+                  }
+                  return startBuildStub(
+                    exe,
+                    args,
+                    workingDirectory: workingDirectory,
+                    environment: environment,
+                    mode: mode,
+                  );
+                },
+          );
+          expect(result.code, 130);
+          expect(await exit.future, (130, true));
+          expect(lastEvent(result.out), containsPair('type', 'done'));
+          expect(result.err, isNot(contains('Sending ')));
+          final work = p.join(
+            project,
+            '.dart_tool',
+            'dartbrew',
+            'test',
+            'ctr',
+            'jit',
+            'work',
+          );
+          expect(
+            File(p.join(work, '$stage.log')).readAsStringSync(),
+            contains('stage diagnostic'),
+          );
+        },
+      );
+    }
+
+    for (final duringStart in [true, false]) {
+      test(
+        'interrupt disposes Azahar before exit (during startup: $duringStart)',
+        () async {
+          final project = _project({'test/a_test.dart': _testFile});
+          final script = File(p.join(project, 'emulator.dart'))
+            ..writeAsStringSync(
+              "import 'dart:async'; void main() { Timer(const Duration(minutes: 1), () {}); }",
+            );
+          final interrupts = StreamController<Object?>(sync: true);
+          addTearDown(interrupts.close);
+          Process? emulator;
+          bool reaped = false;
+          addTearDown(() => emulator?.kill());
+          final status = Completer<(int, bool)>();
+          final result = await _test(
+            project,
+            ['-r', 'json', '-d', 'azahar', '--azahar', script.path],
+            azaharHost: AzaharHost(
+              operatingSystem: Platform.operatingSystem,
+              environment: {'DARTBREW_AZAHAR_SDMC': p.join(project, 'sdmc')},
+              currentDirectory: project,
+            ),
+            interrupts: () => interrupts.stream,
+            exitProcess: (code) async => status.complete((code, reaped)),
+            start:
+                (
+                  exe,
+                  args, {
+                  workingDirectory,
+                  environment,
+                  mode = ProcessStartMode.normal,
+                }) async {
+                  if (exe != script.path) {
+                    return startBuildStub(
+                      exe,
+                      args,
+                      workingDirectory: workingDirectory,
+                      environment: environment,
+                      mode: mode,
+                    );
+                  }
+                  final child = emulator = await Process.start(
+                    Platform.resolvedExecutable,
+                    [script.path],
+                  );
+                  child.exitCode.then((_) => reaped = true);
+                  if (duringStart) {
+                    interrupts.add(null);
+                  } else {
+                    Timer.run(() => interrupts.add(null));
+                  }
+                  return child;
+                },
+          );
+          expect(await status.future, (130, true));
+          expect(result.code, 130);
+        },
+      );
+    }
+
+    test('interrupting native compilation cleans staging before exit', () async {
+      final project = _project({'test/a_test.dart': _testFile});
+      final interrupts = StreamController<Object?>();
+      addTearDown(interrupts.close);
+      final exit = Completer<({int code, bool staged})>();
+      Directory? staging;
+      final result = await _test(
+        project,
+        ['-r', 'json'],
+        interrupts: () => interrupts.stream,
+        exitProcess: (code) async {
+          exit.complete((code: code, staged: staging!.existsSync()));
+        },
+        start:
+            (
+              exe,
+              args, {
+              workingDirectory,
+              environment,
+              mode = ProcessStartMode.normal,
+            }) async {
+              if (args.length == 1 &&
+                  args.single.startsWith('@') &&
+                  staging == null) {
+                final response = File(args.single.substring(1));
+                staging = response.parent.parent;
+                final script = File(p.join(project, 'pending.dart'))
+                  ..writeAsStringSync(
+                    'Future<void> main() => Future<void>.delayed(const Duration(seconds: 20));',
+                  );
+                final child = await Process.start(Platform.resolvedExecutable, [
+                  script.path,
+                ]);
+                interrupts.add(null);
+                return child;
+              }
+              return startBuildStub(
+                exe,
+                args,
+                workingDirectory: workingDirectory,
+                environment: environment,
+                mode: mode,
+              );
+            },
+      );
+      expect(result.code, 130);
+      expect(await exit.future, (code: 130, staged: false));
+      expect(lastEvent(result.out), containsPair('type', 'done'));
+    });
+
+    test('when the user interrupts the run, then exits 130', () async {
+      final project = _project({'test/a_test.dart': _testFile});
+      final interrupts = StreamController<Object?>();
+      final stream = RecordedStream();
+      final suite = stream.suite('test/a_test.dart');
+      stream
+        ..plan(suite, ['one', 'two'])
+        ..start(suite, 'one');
+      final console = await FakeConsole.start(
+        script: (app) async {
+          app.begin();
+          stream.lines.forEach(app.output);
+          await app.socket.flush();
+          interrupts.add(null);
+        },
+      );
+      addTearDown(console.close);
+      final exits = <int>[];
+      final r = await _test(
+        project,
+        ['-r', 'json'],
+        console: console,
+        interrupts: () => interrupts.stream,
+        exitProcess: (code) async => exits.add(code),
+      );
+
+      expect(exits, [130]);
+      final done = [
+        for (final line in const LineSplitter().convert(r.out))
+          if (line.startsWith('{"type":"done"')) line,
+      ];
+      expect(done, hasLength(1));
+      expect(lastEvent(r.out), containsPair('type', 'done'));
+      expect(lastEvent(r.out), containsPair('success', false));
+    });
+
+    test('compact output gains nothing when the app cannot be sent', () async {
+      final project = _project({'test/a_test.dart': _testFile});
+      final r = await _test(project, []);
+
+      expect(r.code, 1);
+      expect(r.out, isEmpty);
+    });
   });
 
   test('a syntax error in one of three files is a load error; the other two '

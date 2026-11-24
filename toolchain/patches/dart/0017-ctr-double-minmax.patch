@@ -1,0 +1,105 @@
+Preserve NaNs and signed zeros in min and max.
+
+diff --git a/runtime/vm/compiler/backend/il_arm.cc b/runtime/vm/compiler/backend/il_arm.cc
+index c65e2841..743a6077 100644
+--- a/runtime/vm/compiler/backend/il_arm.cc
++++ b/runtime/vm/compiler/backend/il_arm.cc
+@@ -1377,10 +1377,12 @@ static Condition TokenKindToDoubleCondition(Token::Kind kind) {
+   }
+ }
+ 
+-static Condition EmitCtrDoubleComparison(FlowGraphCompiler* compiler,
+-                                         const LocationSummary& locs,
+-                                         Token::Kind kind,
+-                                         BranchLabels labels) {
++static void EmitCtrDoubleOrdering(FlowGraphCompiler* compiler,
++                                  const LocationSummary& locs,
++                                  compiler::Label* less,
++                                  compiler::Label* equal,
++                                  compiler::Label* greater,
++                                  compiler::Label* unordered) {
+   const Register left_lo = locs.temp(0).reg();
+   const Register left_hi = locs.temp(1).reg();
+   const Register right_lo = locs.temp(2).reg();
+@@ -1388,13 +1390,6 @@ static Condition EmitCtrDoubleComparison(FlowGraphCompiler* compiler,
+   __ vmovrrd(left_lo, left_hi, EvenDRegisterOf(locs.in(0).fpu_reg()));
+   __ vmovrrd(right_lo, right_hi, EvenDRegisterOf(locs.in(1).fpu_reg()));
+ 
+-  auto* less = (kind == Token::kLT || kind == Token::kLTE || kind == Token::kNE)
+-                   ? labels.true_label : labels.false_label;
+-  auto* equal = (kind == Token::kEQ || kind == Token::kLTE || kind == Token::kGTE)
+-                    ? labels.true_label : labels.false_label;
+-  auto* greater = (kind == Token::kGT || kind == Token::kGTE || kind == Token::kNE)
+-                      ? labels.true_label : labels.false_label;
+-  auto* unordered = kind == Token::kNE ? labels.true_label : labels.false_label;
+   compiler::Label left_ordered, both_ordered, same_sign, unsigned_lower;
+ 
+   // Shift out the sign; values beyond infinity, including low payloads, are NaN.
+@@ -1437,6 +1432,20 @@ static Condition EmitCtrDoubleComparison(FlowGraphCompiler* compiler,
+   __ TestImmediate(left_hi, 0x80000000);
+   __ b(greater, NE);
+   __ b(less);
++}
++
++static Condition EmitCtrDoubleComparison(FlowGraphCompiler* compiler,
++                                         const LocationSummary& locs,
++                                         Token::Kind kind,
++                                         BranchLabels labels) {
++  auto* less = (kind == Token::kLT || kind == Token::kLTE || kind == Token::kNE)
++                   ? labels.true_label : labels.false_label;
++  auto* equal = (kind == Token::kEQ || kind == Token::kLTE || kind == Token::kGTE)
++                    ? labels.true_label : labels.false_label;
++  auto* greater = (kind == Token::kGT || kind == Token::kGTE || kind == Token::kNE)
++                      ? labels.true_label : labels.false_label;
++  auto* unordered = kind == Token::kNE ? labels.true_label : labels.false_label;
++  EmitCtrDoubleOrdering(compiler, locs, less, equal, greater, unordered);
+   return EQ;  // Every path above branches to a supplied result label.
+ }
+ 
+@@ -5554,14 +5563,16 @@ LocationSummary* MathMinMaxInstr::MakeLocationSummary(Zone* zone,
+                                                       bool opt) const {
+   if (representation() == kUnboxedDouble) {
+     const intptr_t kNumInputs = 2;
+-    const intptr_t kNumTemps = 1;
++    const intptr_t kNumTemps = TargetCPUFeatures::armv6k() ? 4 : 1;
+     LocationSummary* summary = new (zone)
+         LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kNoCall);
+     summary->set_in(0, Location::RequiresFpuRegister());
+     summary->set_in(1, Location::RequiresFpuRegister());
+     // Reuse the left register so that code can be made shorter.
+     summary->set_out(0, Location::SameAsFirstInput());
+-    summary->set_temp(0, Location::RequiresRegister());
++    for (intptr_t i = 0; i < kNumTemps; ++i) {
++      summary->set_temp(i, Location::RequiresRegister());
++    }
+     return summary;
+   }
+   UNREACHABLE();
+@@ -5578,6 +5589,27 @@ void MathMinMaxInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+     const DRegister right = EvenDRegisterOf(locs()->in(1).fpu_reg());
+     const DRegister result = EvenDRegisterOf(locs()->out(0).fpu_reg());
+     const Register temp = locs()->temp(0).reg();
++    if (TargetCPUFeatures::armv6k()) {
++      compiler::Label use_left, use_right;
++      ASSERT(left == result);
++      EmitCtrDoubleOrdering(compiler, *locs(),
++                            is_min ? &use_left : &use_right, &are_equal,
++                            is_min ? &use_right : &use_left, &returns_nan);
++      __ Bind(&are_equal);
++      // Equal zeros differ only in their sign. Preserve -0 for min, +0 for max.
++      __ vmovrrd(IP, temp, left);
++      __ cmp(temp, compiler::Operand(0));
++      __ b(&use_right, is_min ? GE : LT);
++      __ Bind(&use_left);
++      __ b(&done);
++      __ Bind(&use_right);
++      __ vmovd(result, right);
++      __ b(&done);
++      __ Bind(&returns_nan);
++      __ LoadDImmediate(result, NAN, temp);
++      __ Bind(&done);
++      return;
++    }
+     __ vcmpd(left, right);
+     __ vmstat();
+     __ b(&returns_nan, VS);

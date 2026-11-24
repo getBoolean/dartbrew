@@ -8,13 +8,40 @@
 #include <cstring>
 #include <malloc.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
 namespace ctr {
 #if defined(__3DS__)
 static constexpr u32 kBufferSize = 0x100000;
-bool Link::Open(const uint8_t address[4], uint16_t port, std::string* error) {
+bool SocketService::Start() {
+  if (buffer_) return true;
+  char text[64];
+  buffer_ = static_cast<uint32_t*>(memalign(0x1000, kBufferSize));
+  if (!buffer_) {
+    snprintf(text, sizeof(text), "socket buffer allocation (%ld)", 0L);
+    error_ = text;
+    return false;
+  }
+  Result result = socInit(buffer_, kBufferSize);
+  if (R_FAILED(result)) {
+    free(buffer_);
+    buffer_ = nullptr;
+    snprintf(text, sizeof(text), "socInit (%ld)", static_cast<long>(result));
+    error_ = text;
+    return false;
+  }
+  return true;
+}
+void SocketService::Stop() {
+  if (!buffer_) return;
+  socExit();
+  free(buffer_);
+  buffer_ = nullptr;
+}
+bool Link::Open(const SocketService& service, const uint8_t address[4], uint16_t port,
+                std::string* error) {
   char text[160];
   const int written = snprintf(text, sizeof(text), "CTR host link to %u.%u.%u.%u:%u failed: ",
                                address[0], address[1], address[2], address[3], port);
@@ -24,13 +51,11 @@ bool Link::Open(const uint8_t address[4], uint16_t port, std::string* error) {
     Close();
     return false;
   };
-  buffer_ = static_cast<uint32_t*>(memalign(0x1000, kBufferSize));
-  if (!buffer_) return fail("socket buffer allocation", 0);
-  Result result = socInit(buffer_, kBufferSize);
-  if (R_FAILED(result)) {
-    free(buffer_);
-    buffer_ = nullptr;
-    return fail("socInit", static_cast<long>(result));
+  if (!service.ready()) {
+    // The same text as when the link started soc itself.
+    snprintf(text + written, sizeof(text) - written, "%s", service.error().c_str());
+    *error = text;
+    return false;
   }
   socket_ = socket(AF_INET, SOCK_STREAM, 0);
   if (socket_ < 0) return fail("socket", errno);
@@ -51,25 +76,46 @@ bool Link::Write(const char* data, size_t size) {
   }
   return socket_ >= 0;
 }
+intptr_t Link::Read(uint8_t* buffer, intptr_t length) {
+  // soc's poll() may wait out its whole timeout before reporting a ready
+  // socket (libctru#412), so readers wait in short slices and check for stop.
+  constexpr int kSliceMs = 100;
+  while (socket_ >= 0 && !stopping_.load(std::memory_order_acquire)) {
+    pollfd ready = {socket_, POLLIN, 0};
+    const int result = poll(&ready, 1, kSliceMs);
+    if (result < 0) return -1;
+    if (result == 0) continue;
+    const ssize_t received = recv(socket_, buffer, static_cast<size_t>(length), 0);
+    if (received >= 0) return received;
+    if (errno != EAGAIN && errno != EWOULDBLOCK) return -1;
+  }
+  return 0;
+}
 void Link::Close() {
   if (socket_ >= 0) {
     shutdown(socket_, SHUT_WR);
+    // Discard stdin the program never read: closing with unread bytes can
+    // reset the connection before the host has read the last records.
+    char unread[256];
+    for (pollfd ready = {socket_, POLLIN, 0};
+         poll(&ready, 1, 0) > 0 && recv(socket_, unread, sizeof(unread), 0) > 0;) {}
     close(socket_);
     socket_ = -1;
-  }
-  if (buffer_) {
-    socExit();
-    free(buffer_);
-    buffer_ = nullptr;
   }
 }
 #else
 // Host builds have no soc:U; host checks attach their own Sink to Report.
-bool Link::Open(const uint8_t[4], uint16_t, std::string* error) {
+bool SocketService::Start() {
+  error_ = "socket service unavailable on this platform";
+  return false;
+}
+void SocketService::Stop() {}
+bool Link::Open(const SocketService&, const uint8_t[4], uint16_t, std::string* error) {
   *error = "CTR host link is unavailable on this platform";
   return false;
 }
 bool Link::Write(const char*, size_t) { return false; }
+intptr_t Link::Read(uint8_t*, intptr_t) { return 0; }
 void Link::Close() {}
 #endif
 }

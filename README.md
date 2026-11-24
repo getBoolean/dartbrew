@@ -12,22 +12,20 @@ ARM11 CPU, in either of two modes:
 - **AOT:** the program is compiled to ARMv6K machine code on your computer.
 - **JIT:** the Dart VM compiles the program on the console itself.
 
-> **Status: experimental preview.** Core Dart works on hardware: the language,
-> `dart:core`, `dart:async`, `dart:collection`, garbage collection, exceptions
-> and stack traces. File and network I/O, isolates, FFI and Flutter do not work
-> yet. See [what is supported](docs/ctr-supported-features.md).
+**Experimental preview.** Download the [preview.5 SDK](https://github.com/getBoolean/dartbrew/releases/tag/v0.1.0-preview.5)
+for your host. See [CTR support](docs/ctr-supported-features.md) for coverage
+by feature and execution mode.
 
 ## Requirements
 
-- **Device:** a New 3DS-family console running
-  [Luma3DS](https://github.com/LumaTeam/Luma3DS) and Homebrew Launcher, or the
-  [Azahar](https://github.com/azahar-emu/azahar) emulator. Testing so far used a
-  New 3DS. The original 3DS is unsupported.
-- **Computer:** Windows x64, Linux x64 (glibc 2.36 or newer), or macOS on Intel
-  or Apple Silicon.
-
-The SDK download is self-contained. You don't need Dart, Docker, Python,
-devkitARM or a cross compiler installed.
+- A Windows x64, Linux x64 (glibc 2.36 or newer) or Apple Silicon Mac. The
+  preview.5 Mac binaries target macOS 14.0 or newer. The SDK build tests ran
+  on macOS 27.0. Gatekeeper rejected the quarantined preview.5 CLI on that host.
+- devkitPro with the **3DS Development** group (devkitARM and libctru). The
+  first build compiles the native runtime for the selected mode. Subsequent
+  builds reuse it from the local cache. [devkitPro installation guide](https://devkitpro.org/wiki/Getting_Started)
+- A New 3DS-family console with Luma3DS and Homebrew Launcher for AOT and JIT,
+  or Azahar for AOT. The original 3DS is unsupported.
 
 ## Quick start
 
@@ -70,16 +68,14 @@ devkitARM or a cross compiler installed.
 
 `dartbrew compile` replaces `ctr build` from earlier previews, and the `ctr`
 command is gone. `dartbrew pub`, `analyze`, `format`, `fix`, `doc` and `info`
-run the bundled Dart SDK. See the [SDK guide](release/README.md) for every
+run the bundled Dart SDK. See the [SDK guide](docs/user-guide.md) for every
 command, Azahar setup and the SD card flow.
 
 ## Building from source
 
-Maintainers build the patched Dart SDK, the runtime and the per-host SDK
-downloads with a pinned Docker Compose toolchain and GitHub Actions. Start with
-the [runtime runbook](docs/runbooks/ctr-runtime.md),
-the [Compose setup](docs/ctr-compose.md) and the
-[native SDK overview](docs/ctr-native-sdk.md).
+Maintainers use the [release checklist](docs/releasing.md) to build the SDKs,
+qualify the extracted archives and publish a preview. The [SDK overview](docs/ctr-native-sdk.md)
+describes the host and target components and the launcher protocol.
 
 Layout:
 
@@ -88,15 +84,15 @@ Layout:
 | `packages/dartbrew` | The `dartbrew` command-line tool. |
 | `toolchain` | Dart SDK pins, the CTR patch queue and the SDK build scripts. |
 | `runtime/ctr` | The launcher that embeds the Dart VM on the console. |
-| `release` | Scripts that build and package the per-host SDK downloads. |
+| `packages/release_tools` | SDK build, packaging and qualification commands. |
+| `release` | Preview version, host toolchain requirements and third-party notices. |
 | `test/programs` | Sample programs used for hardware checks. |
 
 ## License and credits
 
 This project is licensed under the [BSD 3-Clause License](LICENSE). The SDK
-downloads bundle third-party software under its own licenses, including GNU
-binutils (GPL). [CREDITS.md](CREDITS.md) lists every component and its license.
-The binutils corresponding source is published with each release.
+includes third-party software under the licenses shipped in its notices.
+[CREDITS.md](CREDITS.md) identifies the upstream software and external tools.
 
 ## Trademarks
 

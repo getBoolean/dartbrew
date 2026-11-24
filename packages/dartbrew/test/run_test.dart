@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import 'package:dartbrew/src/commands/run.dart';
 import 'package:dartbrew/src/device/device.dart';
 import 'package:dartbrew/src/device/transport.dart';
+import 'package:dartbrew/src/targets/ctr/azahar.dart';
 import 'package:dartbrew/src/targets/ctr/netloader.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
@@ -79,8 +80,9 @@ Future<_Run> _run(
   final runner = CommandRunner<int>('dartbrew', '')
     ..addCommand(
       runCommand(
+        environment: sdk.environment,
         start: startBuildStub,
-        transportFor: (_) => transport,
+        transport: () => transport,
         listenAddress: InternetAddress.loopbackIPv4,
         deadlines: _deadlines,
         settle: const Duration(milliseconds: 100),
@@ -249,6 +251,28 @@ void main() {
     expect(r.out, contains('#0      main (file:///bin/main.dart:1:20)'));
   });
 
+  test('exit(3) on the console makes run exit 3 and the verdict carries '
+      'it', () async {
+    final console = await _console((app) async {
+      app
+        ..begin()
+        ..cleanup('pass')
+        ..terminal('fail', exitCode: 3);
+      await app.close();
+    });
+    final r = await _run(_loopbackClient(port: console.port), [
+      '-d',
+      '127.0.0.1',
+      '--verdict',
+    ]);
+
+    expect(r.code, 3);
+    final lines = const LineSplitter().convert(r.out);
+    final verdict = jsonDecode(lines.last) as Map<String, Object?>;
+    expect(verdict['outcome'], 'fail');
+    expect(verdict['exit_code'], 3);
+  });
+
   test('AE2: a connection closed after begin is a lost connection', () async {
     final console = await _console((app) async {
       app.begin();
@@ -365,6 +389,121 @@ void main() {
     expect(r.err, contains('192.0.2.10'));
     expect(r.err, contains('192.0.2.11'));
     expect(r.err, contains('-d'));
+  });
+
+  test('a busy host port exits 1 naming the port and --host-port', () async {
+    final console = await _console(_passing);
+    final busy = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(busy.close);
+    final sdk = ctrBuildSdk();
+    final err = StringBuffer();
+    final runner = CommandRunner<int>('dartbrew', '')
+      ..addCommand(
+        runCommand(
+          environment: sdk.environment,
+          start: startBuildStub,
+          transport: () => _loopbackClient(port: console.port),
+          listenAddress: InternetAddress.loopbackIPv4,
+          deadlines: _deadlines,
+          out: StringBuffer(),
+          err: err,
+        ),
+      );
+    final code = await runner.run([
+      'run',
+      '--sdk',
+      sdk.root.path,
+      '--project-directory',
+      _project(),
+      '--host-port',
+      '${busy.port}',
+      '-d',
+      '127.0.0.1',
+    ]);
+
+    expect(code, 1);
+    expect(
+      err.toString(),
+      contains('Could not listen on TCP port ${busy.port}'),
+    );
+    expect(err.toString(), contains('--host-port'));
+  });
+
+  test(
+    'an upload the console refuses exits 1 with the netloader message',
+    () async {
+      final r = await _run(_loopbackClient(port: await _freeTcpPort()), [
+        '-d',
+        '127.0.0.1',
+      ]);
+
+      expect(r.code, 1);
+      expect(
+        r.err,
+        contains('Could not connect to the netloader at 127.0.0.1:'),
+      );
+      expect(r.err, contains('press Y'));
+    },
+  );
+
+  test('an Azahar that cannot be started exits 1 naming it', () async {
+    final root = _project();
+    final azahar = File(p.join(root, 'azahar.exe'))..writeAsStringSync('');
+    final sdk = ctrBuildSdk();
+    final err = StringBuffer();
+    final runner = CommandRunner<int>('dartbrew', '')
+      ..addCommand(
+        runCommand(
+          environment: sdk.environment,
+          start:
+              (
+                executable,
+                arguments, {
+                workingDirectory,
+                environment,
+                mode = ProcessStartMode.normal,
+              }) {
+                if (executable == azahar.path) {
+                  throw ProcessException(executable, arguments, 'not allowed');
+                }
+                return startBuildStub(
+                  executable,
+                  arguments,
+                  workingDirectory: workingDirectory,
+                  environment: environment,
+                  mode: mode,
+                );
+              },
+          listenAddress: InternetAddress.loopbackIPv4,
+          deadlines: _deadlines,
+          azaharHost: AzaharHost(
+            environment: {'DARTBREW_AZAHAR_SDMC': p.join(root, 'sdmc')},
+            operatingSystem: Platform.operatingSystem,
+            currentDirectory: root,
+          ),
+          out: StringBuffer(),
+          err: err,
+        ),
+      );
+    final code = await runner.run([
+      'run',
+      '--sdk',
+      sdk.root.path,
+      '--project-directory',
+      root,
+      '--host-port',
+      '${await _freeTcpPort()}',
+      '-d',
+      'azahar',
+      '--azahar',
+      azahar.path,
+    ]);
+
+    expect(code, 1);
+    expect(
+      err.toString(),
+      contains('Could not start Azahar at ${azahar.path}: not allowed'),
+    );
   });
 
   test('--verdict prints a verdict matching the built app and writes '

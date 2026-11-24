@@ -5,7 +5,8 @@ import 'package:path/path.dart' as p;
 
 import '../process.dart';
 import '../sdk.dart';
-import '../targets/target.dart';
+import '../targets/ctr/templates.dart';
+import 'target_option.dart';
 
 /// Dart reserved words, which a package name cannot be.
 const _reservedWords = {
@@ -131,7 +132,6 @@ class CreateCommand extends Command<int> {
     if (args.rest.length != 1) {
       throw UsageException('create requires one directory.', usage);
     }
-    final target = selectedTarget(args);
     final directory = Directory(p.normalize(p.absolute(args.rest.single)));
     final name = p.basename(directory.path);
     if (!isValidPackageName(name)) {
@@ -149,8 +149,9 @@ class CreateCommand extends Command<int> {
         directory.path,
       );
     }
-    for (final MapEntry(key: path, value: contents)
-        in target.template(name).entries) {
+    for (final MapEntry(key: path, value: contents) in ctrTemplate(
+      name,
+    ).entries) {
       final file = File(p.joinAll([directory.path, ...path.split('/')]));
       file.parent.createSync(recursive: true);
       file.writeAsStringSync(contents);
