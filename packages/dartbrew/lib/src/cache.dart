@@ -53,35 +53,25 @@ final class NativeCache {
       ..createSync(recursive: true);
     final file = File(p.join(lockDir.path, key));
     if (!Platform.isWindows && !file.existsSync()) file.createSync();
-    while (true) {
-      checkCancelled?.call();
-      final release = tryCacheLock(file);
-      if (release == null) {
-        await Future<void>.delayed(const Duration(milliseconds: 75));
-        continue;
+    return withCacheLock(file, checkCancelled, () async {
+      if (entry.existsSync()) return entry;
+      final prefix = '.build-$key-';
+      // The OS may have released the previous owner's lock on a hard
+      // termination. Only that key's unpublished directories are ours.
+      for (final old in root.listSync(followLinks: false)) {
+        if (old is Directory && p.basename(old.path).startsWith(prefix)) {
+          old.deleteSync(recursive: true);
+        }
       }
+      final work = root.createTempSync(prefix);
       try {
-        if (entry.existsSync()) return entry;
-        final prefix = '.build-$key-';
-        // The OS may have released the previous owner's lock on a hard
-        // termination. Only that key's unpublished directories are ours.
-        for (final old in root.listSync(followLinks: false)) {
-          if (old is Directory && p.basename(old.path).startsWith(prefix)) {
-            old.deleteSync(recursive: true);
-          }
-        }
-        final work = root.createTempSync(prefix);
-        try {
-          await build(work);
-          checkCancelled?.call();
-          work.renameSync(entry.path);
-          return entry;
-        } finally {
-          if (work.existsSync()) work.deleteSync(recursive: true);
-        }
+        await build(work);
+        checkCancelled?.call();
+        work.renameSync(entry.path);
+        return entry;
       } finally {
-        release();
+        if (work.existsSync()) work.deleteSync(recursive: true);
       }
-    }
+    });
   }
 }

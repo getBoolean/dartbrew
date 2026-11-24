@@ -1,10 +1,20 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:dartbrew/src/cache.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
+
+Future<void> _abandonBuild((String, SendPort) request) async {
+  final (path, started) = request;
+  await NativeCache(Directory(path)).getOrBuild('sample', (stage) async {
+    File(p.join(stage.path, 'partial')).writeAsStringSync('partial');
+    started.send(true);
+    await ReceivePort().first;
+  });
+}
 
 void main() {
   late Directory root;
@@ -90,6 +100,32 @@ void main() {
       );
     },
   );
+
+  test('a killed builder isolate releases its lock in the live VM', () async {
+    final started = ReceivePort();
+    final exited = ReceivePort();
+    addTearDown(started.close);
+    addTearDown(exited.close);
+    final owner = await Isolate.spawn(_abandonBuild, (
+      root.path,
+      started.sendPort,
+    ), onExit: exited.sendPort);
+    await started.first.timeout(const Duration(seconds: 10));
+    final waiter = cache.getOrBuild('sample', (stage) async {
+      File(p.join(stage.path, 'complete')).writeAsStringSync('replacement');
+    });
+    owner.kill(priority: Isolate.immediate);
+    await exited.first.timeout(const Duration(seconds: 10));
+    final entry = await waiter.timeout(const Duration(seconds: 10));
+    expect(
+      File(p.join(entry.path, 'complete')).readAsStringSync(),
+      'replacement',
+    );
+    expect(
+      root.listSync().map((f) => p.basename(f.path)),
+      unorderedEquals(['.locks', 'sample']),
+    );
+  });
 
   Future<({Process process, StreamIterator<String> output})> worker(
     String label, {

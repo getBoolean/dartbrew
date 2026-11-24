@@ -1,13 +1,96 @@
+import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
+
+/// Runs [build] while holding the OS lock. Only cold requests start a lock
+/// owner. It closes its handle even when the build isolate is killed without
+/// unwinding its Dart stack.
+Future<T> withCacheLock<T>(
+  File file,
+  void Function()? checkCancelled,
+  Future<T> Function() build,
+) async {
+  final replies = ReceivePort();
+  final messages = StreamIterator<Object>(
+    replies.takeWhile((message) => message != null).cast<Object>(),
+  );
+  SendPort? commands;
+  try {
+    await Isolate.spawn(_ownCacheLock, (
+      Isolate.current,
+      replies.sendPort,
+      file.path,
+    ), onExit: replies.sendPort);
+    Future<Object> reply() async {
+      if (!await messages.moveNext()) {
+        throw StateError('Native cache lock owner exited before replying.');
+      }
+      final message = messages.current;
+      if (message case (Object error, StackTrace trace)) {
+        Error.throwWithStackTrace(error, trace);
+      }
+      return message;
+    }
+
+    commands = await reply() as SendPort;
+    while (true) {
+      checkCancelled?.call();
+      commands.send(true);
+      if (await reply() == true) break;
+      await Future<void>.delayed(const Duration(milliseconds: 75));
+    }
+    checkCancelled?.call();
+    return await build();
+  } finally {
+    if (commands != null) {
+      commands.send(null);
+      await messages.moveNext();
+    }
+    replies.close();
+    await messages.cancel();
+  }
+}
+
+Future<void> _ownCacheLock((Isolate, SendPort, String) request) async {
+  final (builder, replies, path) = request;
+  final commands = ReceivePort();
+  final control = commands.sendPort;
+  // An immediate ping acknowledges all earlier control messages, including
+  // registration of the builder's exit notification. If it already died, no
+  // ping arrives. Retire the idle helper without opening a file.
+  builder.addOnExitListener(control);
+  builder.ping(control, response: 'ready');
+  final startup = Timer(const Duration(seconds: 30), () => control.send(null));
+  void Function()? release;
+  try {
+    await for (final command in commands) {
+      if (command == null) break;
+      if (command == 'ready') {
+        startup.cancel();
+        replies.send(control);
+      } else {
+        release = _tryCacheLock(File(path));
+        replies.send(release != null);
+      }
+    }
+  } catch (error, trace) {
+    replies.send((error, trace));
+  } finally {
+    release?.call();
+    startup.cancel();
+    builder.removeOnExitListener(control);
+    commands.close();
+  }
+}
 
 /// Tries to lock one cache key. Each successful acquisition owns its own OS
 /// handle, even across isolates in the same process. The OS releases the lock
 /// on process exit. Never unlink lock files: a waiter could still have the
 /// original inode open when its replacement gets a different lock.
-void Function()? tryCacheLock(File file) {
+void Function()? _tryCacheLock(File file) {
   if (Platform.isWindows) {
     final handle = file.openSync(mode: FileMode.append);
     try {
