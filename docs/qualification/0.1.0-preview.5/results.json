@@ -159,6 +159,6 @@
     "version": "Azahar 2126.2",
     "sdk_archive_sha256": "833d8d5c1fe8a28996aa78272ad28a7cecd5398f22e7e4c203959e3bab7a1c49",
     "receipt": "azahar-aot.json",
-    "receipt_sha256": "e47eecb3d76c0a31951bd42adc6fad058497641a2131269729da21a0f7853598"
+    "receipt_sha256": "0a5450be49a6e5b45ce27bf26efb7872ec321d7f5a0ebdcb9a72f68fc9247396"
   }
 }

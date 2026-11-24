@@ -8,3 +8,6 @@ toolchain/*.specs text eol=lf
 
 # Preserve upstream distribution notices byte for byte.
 release/licenses/*.LICENSE -text whitespace=-blank-at-eol
+
+# Qualification records reference SHA-256 digests of their JSON receipts.
+docs/qualification/0.1.0-preview.5/*.json text eol=lf
