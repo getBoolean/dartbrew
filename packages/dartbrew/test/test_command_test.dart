@@ -8,6 +8,7 @@ import 'package:dartbrew/src/commands/test.dart';
 import 'package:dartbrew/src/device/device.dart';
 import 'package:dartbrew/src/process.dart';
 import 'package:dartbrew/src/stage_runner.dart';
+import 'package:dartbrew/src/targets/ctr/azahar.dart';
 import 'package:dartbrew/src/targets/ctr/netloader.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
@@ -102,6 +103,7 @@ Future<_Result> _test(
   String project,
   List<String> args, {
   FakeConsole? console,
+  AzaharHost? azaharHost,
   ProcessStarter start = startBuildStub,
   String command = 'test',
   StringBuffer? out,
@@ -125,6 +127,7 @@ Future<_Result> _test(
         transport: transport,
         listenAddress: InternetAddress.loopbackIPv4,
         deadlines: _deadlines,
+        azaharHost: azaharHost,
         interrupts: interrupts,
         exitProcess: exitProcess ?? (_) => fail('exitProcess called'),
         out: out,
@@ -441,6 +444,67 @@ void main() {
             File(p.join(work, '$stage.log')).readAsStringSync(),
             contains('stage diagnostic'),
           );
+        },
+      );
+    }
+
+    for (final duringStart in [true, false]) {
+      test(
+        'interrupt disposes Azahar before exit (during startup: $duringStart)',
+        () async {
+          final project = _project({'test/a_test.dart': _testFile});
+          final script = File(p.join(project, 'emulator.dart'))
+            ..writeAsStringSync(
+              "import 'dart:async'; void main() { Timer(const Duration(minutes: 1), () {}); }",
+            );
+          final interrupts = StreamController<Object?>(sync: true);
+          addTearDown(interrupts.close);
+          Process? emulator;
+          bool reaped = false;
+          addTearDown(() => emulator?.kill());
+          final status = Completer<(int, bool)>();
+          final result = await _test(
+            project,
+            ['-r', 'json', '-d', 'azahar', '--azahar', script.path],
+            azaharHost: AzaharHost(
+              operatingSystem: Platform.operatingSystem,
+              environment: {'DARTBREW_AZAHAR_SDMC': p.join(project, 'sdmc')},
+              currentDirectory: project,
+            ),
+            interrupts: () => interrupts.stream,
+            exitProcess: (code) async => status.complete((code, reaped)),
+            start:
+                (
+                  exe,
+                  args, {
+                  workingDirectory,
+                  environment,
+                  mode = ProcessStartMode.normal,
+                }) async {
+                  if (exe != script.path) {
+                    return startBuildStub(
+                      exe,
+                      args,
+                      workingDirectory: workingDirectory,
+                      environment: environment,
+                      mode: mode,
+                    );
+                  }
+                  final child = emulator = await Process.start(
+                    Platform.resolvedExecutable,
+                    [script.path],
+                  );
+                  child.exitCode.then((_) => reaped = true);
+                  if (duringStart) {
+                    interrupts.add(null);
+                  } else {
+                    Timer.run(() => interrupts.add(null));
+                  }
+                  return child;
+                },
+          );
+          expect(await status.future, (130, true));
+          expect(result.code, 130);
         },
       );
     }

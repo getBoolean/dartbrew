@@ -37,7 +37,9 @@ final class BuildProcesses {
   final ProcessStarter _start;
   final _children = <Process>{};
   final _active = <Completer<void>>{};
-  bool _cancelled = false;
+  final _cancellation = Completer<void>();
+  Future<void> get cancelled => _cancellation.future;
+  bool get _cancelled => _cancellation.isCompleted;
 
   BuildProcesses(this._start);
 
@@ -85,7 +87,8 @@ final class BuildProcesses {
   }
 
   void _cancel() {
-    _cancelled = true;
+    if (_cancelled) return;
+    _cancellation.complete();
     for (final child in _children) {
       child.kill(ProcessSignal.sigkill);
     }

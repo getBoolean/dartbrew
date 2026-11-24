@@ -106,6 +106,7 @@ Future<RunResult> runOnDevice({
   RunDeadlines deadlines = const RunDeadlines(),
   void Function(String text)? onOutput,
   Stream<List<int>> Function()? input,
+  Future<void>? cancelled,
 }) async {
   final accumulator = VerdictAccumulator(identity);
   final parser = RuntimeLineParser();
@@ -113,6 +114,8 @@ Future<RunResult> runOnDevice({
   void end(StreamEnd reason) {
     if (!ended.isCompleted) ended.complete(reason);
   }
+
+  cancelled?.then((_) => end(StreamEnd.closed));
 
   void feed(List<RuntimeLine> lines) {
     for (final line in lines) {

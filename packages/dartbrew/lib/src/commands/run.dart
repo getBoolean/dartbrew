@@ -298,7 +298,10 @@ final class DeviceRunner {
   }) async {
     // Azahar is found before building, so a missing emulator fails fast.
     final emulator = switch (settings.device) {
-      Azahar(:final executablePath) => _azahar(executablePath),
+      Azahar(:final executablePath) => _azahar(
+        executablePath,
+        buildProcesses?.start ?? start,
+      ),
       ConsoleAt() || DiscoverConsole() => null,
     };
     final sdk = _sdk = await NativeSdk.load(settings.sdkPath);
@@ -371,24 +374,36 @@ final class DeviceRunner {
         schema: 2,
         environment: device.environment,
       );
-      try {
-        final result = await runOnDevice(
-          device: device,
-          app: build.application,
-          identity: identity,
-          listener: listener,
-          deadlines: RunDeadlines(
-            connect: deadlines.connect,
-            idle: deadlines.idle,
-            timeout: settings.timeout,
-          ),
-          onOutput: onOutput,
-          input: input,
-        );
-        return DeviceRun(build, output, identity, result);
-      } finally {
-        await device.dispose();
+      Future<DeviceRun> launchAndDispose() async {
+        try {
+          final result = await runOnDevice(
+            device: device,
+            app: build.application,
+            identity: identity,
+            listener: listener,
+            deadlines: RunDeadlines(
+              connect: deadlines.connect,
+              idle: deadlines.idle,
+              timeout: settings.timeout,
+            ),
+            onOutput: onOutput,
+            input: input,
+            cancelled: buildProcesses?.cancelled,
+          );
+          return DeviceRun(build, output, identity, result);
+        } finally {
+          await device.dispose();
+        }
       }
+
+      if (emulator != null && buildProcesses != null) {
+        return await BuildProcesses.scoped(
+          start,
+          (_) => launchAndDispose(),
+          parent: buildProcesses,
+        );
+      }
+      return await launchAndDispose();
     } on ProcessException catch (error) {
       throw DartbrewException(
         1,
@@ -400,13 +415,13 @@ final class DeviceRunner {
   }
 
   /// Azahar at [executablePath], or where it is installed on [azaharHost].
-  AzaharDevice _azahar(String? executablePath) {
+  AzaharDevice _azahar(String? executablePath, ProcessStarter launch) {
     final host = azaharHost ?? AzaharHost.current();
     final executable = locateAzahar(host, path: executablePath);
     return AzaharDevice(
       executable: executable,
       sdmc: azaharSdmc(executable, host),
-      start: start,
+      start: launch,
       workingDirectory: host.currentDirectory,
     );
   }
