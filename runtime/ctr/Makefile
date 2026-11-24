@@ -2,6 +2,7 @@
 SDK ?=
 BUILD ?= $(or $(TMPDIR),/tmp)/dartbrew-ctr-host-test
 VM_BUILD ?=
+NINJA_JOBS ?= 3
 RUNTIME ?=
 CXX ?= g++
 OBJDUMP ?= /opt/devkitpro/devkitARM/bin/arm-none-eabi-objdump
@@ -114,8 +115,8 @@ barrier-check:
 # The host driver links the SDK embedder archive for the native dart:io backend.
 host-vm: check-sdk build-dir
 	@test -n "$(VM_BUILD)"
-	"$(SDK)/buildtools/ninja/ninja" -C "$(VM_BUILD)" obj/runtime/bin/libdart_embedder_runtime_jit.a
-	$(CXX) -std=c++20 -Wall -Wextra -Werror -pthread -rdynamic \
+	"$(SDK)/buildtools/ninja/ninja" -C "$(VM_BUILD)" -j$(NINJA_JOBS) obj/runtime/bin/libdart_embedder_runtime_jit.a
+	"$(SDK)/buildtools/linux-x64/clang/bin/clang++" -std=c++20 -Wall -Wextra -Werror -pthread -rdynamic -static-libstdc++ \
 	  -I"$(abspath source)" -I"$(SDK)/runtime/include" \
 	  "$(abspath test/host_vm_test.cc)" $(foreach src,$(SOURCES),"$(abspath $(src))") \
-	  "$(VM_BUILD)/obj/runtime/bin/libdart_embedder_runtime_jit.a" -L"$(VM_BUILD)" -Wl,-rpath,"$(VM_BUILD)" -ldart_jit -ldl -o "$(BUILD)/host_vm_test"
+	  "$(VM_BUILD)/obj/runtime/bin/libdart_embedder_runtime_jit.a" -ldl -o "$(BUILD)/host_vm_test"
