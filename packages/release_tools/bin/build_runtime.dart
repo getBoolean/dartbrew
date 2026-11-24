@@ -1,10 +1,12 @@
 import 'dart:io';
 
 import 'package:args/args.dart';
+import 'package:dartbrew/native_build.dart' show serveBuildWorker;
 import 'package:release_tools/src/release_check.dart';
 import 'package:release_tools/src/runtime_build.dart';
 
 Future<void> main(List<String> arguments) async {
+  if (await serveBuildWorker(arguments)) return;
   final parser = ArgParser()
     ..addOption(
       'jobs',

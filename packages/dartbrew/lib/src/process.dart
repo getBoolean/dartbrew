@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'errors.dart';
+import 'build_tool_worker.dart';
 
 /// Starts a child process. Commands take one of these so tests can run them
 /// against stub executables.
@@ -41,6 +42,8 @@ final class BuildProcesses {
   Future<void> get cancelled => _cancellation.future;
   bool get _cancelled => _cancellation.isCompleted;
 
+  Future<BuildToolWorker>? _worker;
+
   BuildProcesses(this._start);
 
   /// Joins the command's cancellation scope, or watches OS signals when
@@ -75,8 +78,16 @@ final class BuildProcesses {
     } finally {
       await signal?.cancel();
       await terminate?.cancel();
-      scope._active.remove(done);
-      done.complete();
+      try {
+        if (scope._active.length == 1) {
+          final worker = scope._worker;
+          scope._worker = null;
+          if (worker != null) await (await worker).close();
+        }
+      } finally {
+        scope._active.remove(done);
+        done.complete();
+      }
     }
   }
 
@@ -89,6 +100,11 @@ final class BuildProcesses {
   void _cancel() {
     if (_cancelled) return;
     _cancellation.complete();
+    final worker = _worker;
+    if (worker != null) {
+      // The build's finally clause awaits termination and reports any errors.
+      worker.then((w) => w.close()).ignore();
+    }
     for (final child in _children) {
       child.kill(ProcessSignal.sigkill);
     }
@@ -110,6 +126,16 @@ final class BuildProcesses {
     ProcessStartMode mode = ProcessStartMode.normal,
   }) async {
     check();
+    if (_start == startProcess && mode == ProcessStartMode.normal) {
+      final worker = await (_worker ??= BuildToolWorker.open());
+      check();
+      return worker.start(
+        executable,
+        arguments,
+        workingDirectory: workingDirectory,
+        environment: environment,
+      );
+    }
     final child = await _start(
       executable,
       arguments,
