@@ -19,7 +19,9 @@ feature, target and mode, see [CTR support](docs/ctr-supported-features.md).
 
 ## Requirements
 
-- A Windows x64, Linux x64 (glibc 2.36 or newer) or macOS Apple Silicon computer.
+- A Windows x64, Linux x64 (glibc 2.36 or newer) or Apple Silicon Mac. The
+  preview.5 Mac binaries target macOS 14.0 or newer. The SDK build tests ran
+  on macOS 27.0. Gatekeeper rejected the quarantined diagnostic CLI on that host.
 - devkitPro with the **3DS Development** group (devkitARM and libctru). The
   first build compiles the native runtime for the selected mode. Subsequent
   builds reuse it from the local cache. [devkitPro installation guide](https://devkitpro.org/wiki/Getting_Started)
