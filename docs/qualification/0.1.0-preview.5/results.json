@@ -1,6 +1,6 @@
 {
   "version": "0.1.0-preview.5",
-  "status": "draft",
+  "status": "qualified",
   "sdk_head": "35dac222e9d5c7c33e4b6e80ee2b54123a3cba8b",
   "sdk_tree": "1be5b2e114d0857c7b5d607b62b77c7e5e9b9f75",
   "snapshot_hash": "c5e274828bf37a90359bd3b0753e3eb2",
@@ -61,8 +61,8 @@
       "name": "async",
       "covers": "Timers, futures and asynchronous event delivery",
       "results": {
-        "console_aot": "pending",
-        "console_jit": "pending",
+        "console_aot": "pass",
+        "console_jit": "pass",
         "azahar_aot": "pass"
       }
     },
@@ -70,8 +70,8 @@
       "name": "exceptions",
       "covers": "Dart exceptions and stack traces",
       "results": {
-        "console_aot": "pending",
-        "console_jit": "pending",
+        "console_aot": "pass",
+        "console_jit": "pass",
         "azahar_aot": "pass"
       }
     },
@@ -79,8 +79,8 @@
       "name": "exit_code",
       "covers": "Explicit process exit code and output flush",
       "results": {
-        "console_aot": "pending",
-        "console_jit": "pending",
+        "console_aot": "pass",
+        "console_jit": "pass",
         "azahar_aot": "pass"
       }
     },
@@ -88,8 +88,8 @@
       "name": "files",
       "covers": "Synchronous and asynchronous SD filesystem operations",
       "results": {
-        "console_aot": "pending",
-        "console_jit": "pending",
+        "console_aot": "pass",
+        "console_jit": "pass",
         "azahar_aot": "pass"
       }
     },
@@ -97,8 +97,8 @@
       "name": "gc_stress",
       "covers": "Allocation and garbage collection under load",
       "results": {
-        "console_aot": "pending",
-        "console_jit": "pending",
+        "console_aot": "pass",
+        "console_jit": "pass",
         "azahar_aot": "pass"
       }
     },
@@ -106,8 +106,8 @@
       "name": "hello",
       "covers": "Application launch, stdout and orderly shutdown",
       "results": {
-        "console_aot": "pending",
-        "console_jit": "pending",
+        "console_aot": "pass",
+        "console_jit": "pass",
         "azahar_aot": "pass"
       }
     },
@@ -115,8 +115,8 @@
       "name": "numeric",
       "covers": "ARMv6K numeric operations and software math",
       "results": {
-        "console_aot": "pending",
-        "console_jit": "pending",
+        "console_aot": "pass",
+        "console_jit": "pass",
         "azahar_aot": "pass"
       }
     },
@@ -124,8 +124,8 @@
       "name": "platform",
       "covers": "Platform properties, standard streams and exit status",
       "results": {
-        "console_aot": "pending",
-        "console_jit": "pending",
+        "console_aot": "pass",
+        "console_jit": "pass",
         "azahar_aot": "pass"
       }
     },
@@ -133,8 +133,8 @@
       "name": "subnormal",
       "covers": "Subnormal floating-point behavior",
       "results": {
-        "console_aot": "pending",
-        "console_jit": "pending",
+        "console_aot": "pass",
+        "console_jit": "pass",
         "azahar_aot": "pass"
       }
     }
@@ -160,5 +160,14 @@
     "sdk_archive_sha256": "833d8d5c1fe8a28996aa78272ad28a7cecd5398f22e7e4c203959e3bab7a1c49",
     "receipt": "azahar-aot.json",
     "receipt_sha256": "0a5450be49a6e5b45ce27bf26efb7872ec321d7f5a0ebdcb9a72f68fc9247396"
+  },
+  "console": {
+    "environment": "Physical New 3DS-family console, Homebrew Launcher",
+    "sdk_host": "windows-x64",
+    "sdk_archive_sha256": "833d8d5c1fe8a28996aa78272ad28a7cecd5398f22e7e4c203959e3bab7a1c49",
+    "sdk_manifest_sha256": "738df04cb3039fcb2407f14f09def23472122f2e3dc353c087a2faef9d84b6a2",
+    "receipt": "console-results.json",
+    "receipt_sha256": "87a96bf19afdc5ef52ff063e6b488efa1eeee6f782314d9bb26ace90c40d9c2b",
+    "journal_extract_sha256": "f7d4ff13d49bbe738d8833fcd17f13397609d8d752b4a230916738ffbdd26de1"
   }
 }

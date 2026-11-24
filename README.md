@@ -12,16 +12,15 @@ ARM11 CPU, in either of two modes:
 - **AOT:** the program is compiled to ARMv6K machine code on your computer.
 - **JIT:** the Dart VM compiles the program on the console itself.
 
-**Experimental preview.** The published preview.4 archives and their original
-setup instructions are available on the [release page](https://github.com/getBoolean/dartbrew/releases/tag/v0.1.0-preview.4).
-The following requirements apply to the preview.5 source tree. For results by
-feature, target and mode, see [CTR support](docs/ctr-supported-features.md).
+**Experimental preview.** Download the [preview.5 SDK](https://github.com/getBoolean/dartbrew/releases/tag/v0.1.0-preview.5)
+for your host. See [CTR support](docs/ctr-supported-features.md) for coverage
+by feature and execution mode.
 
 ## Requirements
 
 - A Windows x64, Linux x64 (glibc 2.36 or newer) or Apple Silicon Mac. The
   preview.5 Mac binaries target macOS 14.0 or newer. The SDK build tests ran
-  on macOS 27.0. Gatekeeper rejected the quarantined diagnostic CLI on that host.
+  on macOS 27.0. Gatekeeper rejected the quarantined preview.5 CLI on that host.
 - devkitPro with the **3DS Development** group (devkitARM and libctru). The
   first build compiles the native runtime for the selected mode. Subsequent
   builds reuse it from the local cache. [devkitPro installation guide](https://devkitpro.org/wiki/Getting_Started)

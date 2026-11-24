@@ -1,20 +1,19 @@
 # Current Dart CTR support
 
-Published preview.4 has a four-host qualification record. Subsequent runs
-on the development branch cover file and directory operations, platform values,
-stdio and explicit exit codes. Preview.5 candidate qualification covers the
-exact rebuilt host archives and device apps separately.
-[Published results](qualification/0.1.0-preview.4/results.json)
+Preview.5 covers nine programs in AOT and JIT on a physical New 3DS-family
+console and in AOT on Azahar 2126.2. The host SDK archives were tested on
+Windows x64, Linux x64 and macOS arm64.
+[Preview.5 qualification results](qualification/0.1.0-preview.5/results.json)
 
 | Area | Current evidence | Remaining boundary |
 | --- | --- | --- |
-| Native AOT | Five curated programs pass on New 3DS | Wider language/library and resource coverage |
-| On-device JIT | The same five programs pass on New 3DS | Wider optimization, lifecycle and compiler stress |
-| CLI packaging | Preview.4 records its four-host checks. The preview.5 Windows spike rebuilt hello AOT with a local devkitPro and ran it in Azahar. | Candidate archive and hardware results belong to their own version. [Native SDK](ctr-native-sdk.md) |
+| Native AOT | Nine curated programs match their expected output and exit codes on New 3DS | Wider language/library and resource coverage |
+| On-device JIT | The same nine programs match their expected output and exit codes on New 3DS | Wider optimization, lifecycle and compiler stress |
+| CLI packaging | Each extracted preview.5 SDK passed seven integration checks, including AOT and JIT builds. | Gatekeeper rejected the quarantined CLI on macOS 27.0. [Native SDK](ctr-native-sdk.md) |
 | Core language and collections | Hello, retained GC data, exception/stack and focused numeric checks | No complete language/corelib compatibility claim |
 | Async/timers | Curated asynchronous work completes and cleans up in both modes | Broader timer, cancellation and long-running application coverage |
 | Numeric semantics | Focused target tests plus software-helper/provider checks | Broader upstream/optimization-mode corpus; not universal numeric compatibility |
-| Files and platform | The development branch ran the files, platform and exit-code programs on the console in AOT and JIT and on Azahar in AOT. | Sockets, DNS, HTTP and TLS await separate qualification. |
+| Files and platform | Preview.5 ran the files, platform and exit-code programs on the console in AOT and JIT and on Azahar in AOT. | Sockets, DNS, HTTP and TLS await separate qualification. |
 | Public isolates | Internal VM threading/ports support tested applications | Public isolate API, multiple-isolate semantics and resource limits are not qualified |
 | FFI/native packages | Native runtime linkage and internal helper ABI checks | These are not public FFI/package qualification; dependency linking/loading and callbacks remain work |
 | Flutter | Planned after universal Dart compatibility | No Flutter engine rendering or application qualification |

@@ -236,7 +236,7 @@ flowchart TB
 
 U2 through U9, U14 and U16 are committed. The U21 spike and U22/U23 local toolchain implementation passed a Windows AOT hello build. With the development SDK, the cold build compiled 646 units in 314.735 seconds. The warm build took 45.469 seconds, reused all 13 cached outputs and produced the same `.3dsx` bytes. Both applications printed `hello:42` and passed cleanup and terminal checks in Azahar 2126.2 on Linux.
 
-The U13/U15 producers, U17 launcher, U18 patch queue and U20 release documentation are implemented. The 29 patches replayed to tree `1be5b2e114d0857c7b5d607b62b77c7e5e9b9f75`. U19 three-host and device qualification is in progress. The [preview.5 results](../qualification/0.1.0-preview.5/results.json) track the candidate separately from the development SDK measurements.
+The U13/U15 producers, U17 launcher, U18 patch queue and U20 release documentation are implemented. The 29 patches replayed to tree `1be5b2e114d0857c7b5d607b62b77c7e5e9b9f75`. U19 qualification passed on all three host archives, in Azahar AOT and on the physical console in AOT and JIT. The [preview.5 results](../qualification/0.1.0-preview.5/results.json) track the candidate separately from the development SDK measurements.
 
 ### Unit Index
 
